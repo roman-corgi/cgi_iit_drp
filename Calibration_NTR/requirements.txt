@@ -1,0 +1,9 @@
+astropy
+matplotlib
+numpy
+opencv-python
+pandas
+pymatreader
+pyyaml
+scikit-image
+scipy

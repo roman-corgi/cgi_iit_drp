@@ -1,0 +1,6 @@
+astropy
+numpy
+yaml
+time
+os
+git

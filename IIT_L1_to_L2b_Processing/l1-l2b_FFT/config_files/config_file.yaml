@@ -1,0 +1,21 @@
+# values applicable to most FFT data taken between 20231104 and 20231124
+
+# Calibration paths
+###################
+flatfield_filepath: 'calibration_files/flat.fits'
+dark_current_map: 'calibration_files/darkmap_1s_e_20231104.fits'
+fixed_pattern_noise: 'calibration_files/fixed_noise_FFT.fits'
+EXCAM_clock_induced_charge: 'calibration_files/EXCAM_cic_FFT.fits'
+badpix_filepath: 'calibration_files/bad_pix.fits'
+non_linearity_filepath: 'calibration_files/nonlin_array_20231104.txt'
+
+# Detector parameters 
+#####################
+fwc_em_e: 100000
+fwc_pp_e: 66850
+bias_offset: 0
+eperdn: 9.55
+
+# png files creation  
+####################
+generate_png_files: False
