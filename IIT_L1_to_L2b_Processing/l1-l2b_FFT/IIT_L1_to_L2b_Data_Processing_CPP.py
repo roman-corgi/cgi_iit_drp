@@ -22,7 +22,7 @@ thisFolder = 'l1-l2b_FFT'   # Must match folder name
 class_name = 'proc_cgi_frame.gsw_process.Process'
 
 TDD_REL_PATH = 'IIT_L1_to_L2b_Processing/'  # Do not put "/" at front or os.path.join() won't work correctly.
-GSW_ABS_PATH = '/Users/vbailey/Documents/code_internal/EXCAM_NTR/EXCAM_processing_NTR_scrubbed/'
+GSW_ABS_PATH = '/Users/vbailey/Documents/code_external/EXCAM/cgi_iit_drp/'
 
 VI_REL_PATH = os.path.join(TDD_REL_PATH, thisFolder)
 TEMP_REL_PATH = os.path.join(VI_REL_PATH, 'temp_data/') 
@@ -677,7 +677,11 @@ if __name__ == '__main__':
     print("Files and directories in '", INPUT_ABS_PATH, "' :")
     print(dir_list)
     DIR_LIST = dir_list
-
+    
+    if not os.path.exists(TEMP_ABS_PATH):
+        os.makedirs(TEMP_ABS_PATH)
+    if not os.path.exists(OUTPUT_ABS_PATH):
+        os.makedirs(OUTPUT_ABS_PATH)
     # Check that dir_list contains only L1 files            
     check_input_files(dir_list,INPUT_ABS_PATH)
     # Throw error if pipeline is called on group of frames that 
