@@ -66,8 +66,8 @@ def tpump_analysis(base_dir, time_head, emgain_head,
     ----------
     base_dir : str
         Full path of base directory containing all trap-pumped FITS files. The
-        metadata assumed to be in PrimaryHDU, and the first extension is
-        assumed to be the ImageHDU, where the array data is located.
+        metadata assumed to be in the 1 or 0 index of the PrimaryHDU, 
+        and the data is assumed to be in the 1 index of the ImageHDU.
         - This folder should contain sub-folders for each temperature entitled
         'tempK', where 'temp' is the float or int value of the detctor
         temperature in K (e.g., 160K).  The function reads everything up to the
@@ -98,8 +98,13 @@ def tpump_analysis(base_dir, time_head, emgain_head,
     emgain_head : str
         Keyword corresponding to EM gain for each FITS file.  Keyword value
         assumed to be float (unitless).
-    num_pumps : int, > 0
-        Number of cycles of pumping performed for each trap-pumped frame.
+    num_pumps : dict 
+        This dictionary must have
+        keys that match the schemes that are used, and the values should be the 
+        corresponding number of cycles of pumping performed for the scheme.
+        Each value must be an integer > 0.  For example, if only schemes 1 and 
+        3 are used, and the values are 10000 pumps and 500 pumps respectively,
+        num_pumps could be {1: 10000, 3: 500}.
     meta_path : str
         Full path of metadata.yaml used for the geometry of the EMCCD and the
         pre-scan, imaging area, etc.  If sample_data = True, this input is
@@ -398,7 +403,11 @@ def tpump_analysis(base_dir, time_head, emgain_head,
             raise TypeError('emgain_head must be a string')
         if type(time_head) != str:
             raise TypeError('time_head must be a string')
-    check.positive_scalar_integer(num_pumps, 'num_pumps', TypeError)
+    if not isinstance(num_pumps, dict):
+        raise TypeError('num_pumps must be a dictionary.')
+    for i in num_pumps:
+        check.positive_scalar_integer(num_pumps[i], 'num_pumps['+str(i)+']', 
+                                      TypeError)
     # for EMCCD geometry
     try:
         meta = MetadataWrapper(meta_path)
@@ -491,6 +500,17 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                 if sch_list.count(num) > 1:
                     raise TPumpAnException('More than one folder for a single '
                     'scheme found.  Should only be one folder per scheme.')
+            # quick check on num_pumps before running the code for too long
+            for sch_dir in sorted(os.listdir(sch_dir_path)):
+                scheme_path = os.path.abspath(Path(sch_dir_path, sch_dir))
+                if os.path.isfile(scheme_path): # just want directories
+                    continue
+                curr_sch = int(sch_dir[-1])
+                try:
+                    num_pumps[curr_sch]
+                except:
+                    raise KeyError('num_pumps should have a matching key for '
+                                   'each scheme that is used.')
             for sch_dir in sorted(os.listdir(sch_dir_path)):
                 scheme_path = os.path.abspath(Path(sch_dir_path, sch_dir))
                 if os.path.isfile(scheme_path): # just want directories
@@ -516,14 +536,20 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                             'image data in 1st extension')
                         with fits.open(f) as hdul:
                             try:
-                                hdr = hdul[0].header
+                                hdr = hdul[1].header
                                 # time from FITS header in us, so convert to s
                                 t = float(hdr[time_head])/10**6
                                 em_gain = float(hdr[emgain_head])
                             except:
-                                raise TPumpAnException('Primary header must '
-                                'contain correct keys for phase time and EM '
-                                'gain')
+                                try:
+                                    hdr = hdul[0].header
+                                    # convert to s from us
+                                    t = float(hdr[time_head])/10**6
+                                    em_gain = float(hdr[emgain_head])
+                                except:
+                                    raise TPumpAnException('Primary header '
+                                    'must contain correct keys for phase time '
+                                    'and EM gain.')
                         timings.append(t)
                         # getting image area (all physical CCD pixels)
                         d = meta.imaging_slice(data)
@@ -729,9 +755,10 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                     # if mean e- per pixel is lower than 2500e-, than max amp
                     # is that mean e- per pixel amount
                     if mean_field is not None:
-                        max_e = min(num_pumps*1*prob_factor_eperdn, mean_field)
+                        max_e = min(num_pumps[1]*1*prob_factor_eperdn, 
+                                    mean_field)
                     else:
-                        max_e = num_pumps*1*prob_factor_eperdn
+                        max_e = num_pumps[1]*1*prob_factor_eperdn
                     eperdn = max_e/peak_trap
                     #convert to e-
                     cor_frames *= eperdn
@@ -775,12 +802,13 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                     off_max = 0 + max(offset_max,np.abs(loc_med_min - loc_avg))
                     if not tfit_const:
                         fd = trap_fit(curr_sch, rc_above[i]['amps_above'],
-                            timings, num_pumps, tau_fit_thresh, tau_min,
-                            tau_max, tauc_min, tauc_max, off_min,
+                            timings, num_pumps[curr_sch], tau_fit_thresh, 
+                            tau_min, tau_max, tauc_min, tauc_max, off_min,
                             off_max) #, k_min, k_max)
                     if tfit_const:
                         fd = trap_fit_const(curr_sch,
-                            rc_above[i]['amps_above'], timings, num_pumps,
+                            rc_above[i]['amps_above'], timings, 
+                            num_pumps[curr_sch],
                             tau_fit_thresh, tau_min, tau_max, pc_min, pc_max,
                             off_min, off_max)
                     if fd is None:
@@ -842,12 +870,13 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                     off_max = 0 + max(offset_max,np.abs(loc_med_min - loc_avg))
                     if not tfit_const:
                         fd = trap_fit(curr_sch, rc_below[i]['amps_below'],
-                            timings, num_pumps, tau_fit_thresh, tau_min,
-                            tau_max, tauc_min, tauc_max, off_min,
+                            timings, num_pumps[curr_sch], tau_fit_thresh, 
+                            tau_min, tau_max, tauc_min, tauc_max, off_min,
                             off_max) #, k_min, k_max)
                     if tfit_const:
                         fd = trap_fit_const(curr_sch,
-                            rc_below[i]['amps_below'], timings, num_pumps,
+                            rc_below[i]['amps_below'], timings, 
+                            num_pumps[curr_sch],
                             tau_fit_thresh, tau_min, tau_max, pc_min, pc_max,
                             off_min, off_max)
                     if fd is None:
@@ -908,14 +937,14 @@ def tpump_analysis(base_dir, time_head, emgain_head,
                     off_max = 0 + max(offset_max,np.abs(loc_med_min - loc_avg))
                     if not tfit_const:
                         fd = trap_fit(curr_sch, rc_both[i]['amps_both'],
-                            timings, num_pumps, tau_fit_thresh, tau_min,
-                            tau_max, tauc_min, tauc_max, off_min,
+                            timings, num_pumps[curr_sch], tau_fit_thresh, 
+                            tau_min, tau_max, tauc_min, tauc_max, off_min,
                             off_max, #k_min, k_max,
                             both_a = rc_both[i]['above'])
                     if tfit_const:
                         fd = trap_fit_const(curr_sch, rc_both[i]['amps_both'],
-                            timings, num_pumps, tau_fit_thresh, tau_min,
-                            tau_max, pc_min, pc_max, off_min,
+                            timings, num_pumps[curr_sch], tau_fit_thresh, 
+                            tau_min, tau_max, pc_min, pc_max, off_min,
                             off_max, both_a = rc_both[i]['above'])
                     if fd is None:
                         bad_fit_counter += 1
@@ -1438,8 +1467,8 @@ if __name__ == '__main__':
     bins_E = 70#100#80 # at 80% for noisy, with inj charge
     bins_cs = 7#10#8 # at 80%
     sample_data = False #True
-
-
+    num_pumps = {1:10000,2:10000,3:10000,4:10000}
+    
     (trap_dict, trap_densities, bad_fit_counter, pre_sub_el_count,
     unused_fit_data, unused_temp_fit_data, two_or_less_count,
     noncontinuous_count) = tpump_analysis(sub_noise_dir, time_head,

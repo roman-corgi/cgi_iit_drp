@@ -35,7 +35,7 @@ if __name__ == '__main__':
     # about the mean for dipole detection.
     thresh_factor = 3
     # Number of pumps during trap-pumping.  For example:
-    num_pumps = 10000
+    num_pumps = {1:10000,2:10000,3:10000,4:10000}
     # By default, ill_corr is True.  For less accurate but somewhat
     # faster results, set ill_corr to False.
     ill_corr = True

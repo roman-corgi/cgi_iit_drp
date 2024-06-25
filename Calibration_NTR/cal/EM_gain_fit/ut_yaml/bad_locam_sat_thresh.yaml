@@ -1,0 +1,82 @@
+# tolerance used in optimization calculation for fitting the EM gain
+tol: 1e-16
+# (1 +/- lambda_factor)*(mean of frame data) used to specify range of allowed
+# values for the optimization calculation
+lambda_factor: 0.5
+# (1 +/- gain_factor)*(commanded gain) used to specify range of allowed
+# values for the optimization calculation
+gain_factor: 0.5
+# fixed value used for the mean of the read noise distribution
+rn_mean: 0
+diff_tol: 1e-5
+
+locam:
+  # same as what is found in excam_config.yaml in util folder
+  rn: 110
+  # The size of the range of integer values found in the frames is divided by
+  # divisor, and the result is used as the number of bins in the
+  # histogram.
+  # if fitting just 1 frame, divisor could be around 20; for at least 5
+  # frames, divisor should be 1.  The more data, the less variance of the
+  # histogram profile, and thus the smaller divisor should be.  At least 5
+  # frames is recommended.
+  divisor: 1
+  # fraction of the saturation amount for a pixel allowed for analysis of the
+  # frames; pixels below this are not used in the analysis.  Assumes the
+  # commanded gain is somewhat accurate. One's confidence in
+  # the commanded gain can be controlled by this parameter (by how
+  # conservatively small this number is)
+  locam_sat_thresh: 0
+  # number of raw frames comprising a LOCAM summed frame
+  num_summed_frames: 10000
+  Nem: 604
+
+excam_low:
+  # minimum frequency allowed for counts in the histogram of frame data for
+  # analysis; if this is too low, the calculated likelihood may be zero, and
+  # the code will suggest an increase in lthresh by 1.
+  # See the doc string for cal.EM_gain_fit.EM_gain_tools._EM_gain_fit_conv
+  # for more details.
+  lthresh: 2
+  # The size of the range of integer values found in the frames is divided by
+  # divisor, and the result is used as the number of bins in the
+  # histogram.
+  # if fitting just 1 frame, divisor could be around 20; for at least 5
+  # frames, divisor should be 1.  The more data, the less variance of the
+  # histogram profile, and thus the smaller divisor should be.  At least 5
+  # frames is recommended.
+  divisor: 1
+  # fraction of the saturation amount for a pixel allowed for analysis of the
+  # frames; pixels below this are not used in the analysis.  sat_thresh,
+  # plat_thresh, and cosm_filter are used in cal.util.gsw_remove_cosmics.py for
+  # EXCAM frames.
+  sat_thresh: 0.7
+  plat_thresh: 0.7
+  cosm_filter: 1
+  cosm_box: 3
+  cosm_tail: 10
+  rowreadtime: 223.5e-6 #in s
+
+excam_high:
+  # minimum frequency allowed for counts in the histogram of frame data for
+  # analysis; if this is too low, the calculated likelihood may be zero, and
+  # the code will suggest an increase in lthresh by 1.
+  # See the doc string for cal.EM_gain_fit.EM_gain_tools._EM_gain_fit_conv
+  # for more details.
+  lthresh: 0
+  # The size of the range of integer values found in the frames is divided by
+  # divisor, and the result is used as the number of bins in the
+  # histogram.
+  # Data from the tail of the distribution is important for high-gain data,
+  # so divisor should be 1 even for a single frame.
+  divisor: 1
+  # fraction of the saturation amount for a pixel allowed for analysis of the
+  # frames; pixels below this are not used in the analysis.  sat_thresh,
+  # plat_thresh, and cosm_filter are used in cal.util.gsw_remove_cosmics.py for
+  # EXCAM frames.
+  sat_thresh: 0.7
+  plat_thresh: 0.7
+  cosm_filter: 1
+  cosm_box: 3
+  cosm_tail: 10
+  rowreadtime: 223.5e-6 #in s
