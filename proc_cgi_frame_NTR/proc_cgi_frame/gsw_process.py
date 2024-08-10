@@ -55,13 +55,25 @@ class Process(object):
         be all ones and have no effect on the image. Defaults to None.
     sat_thresh : float
         Multiplication factor for fwc that determines saturated cosmic pixels.
-        Defaults to 0.99.
+        Defaults to 0.7.
     plat_thresh : float
         Multiplication factor for fwc that determines edges of cosmic plateau.
-        Defaults to 0.85.
+        Defaults to 0.7.
     cosm_filter : int
-        Minimum length in pixels of cosmic plateus to be identified.  Defaults
-        to 2.
+        Minimum length in pixels of cosmic plateaus to be identified.  Defaults
+        to 1.
+    cosm_box : int
+        Number of pixels out from an idenified cosmic head to mask out.
+        For example, if cosm_box is 3, a 7x7 box is masked,
+        with the cosmic head as the center pixel of the box.  Defaults to 3.
+    cosm_tail : int
+        Number of pixels in the row downstream of the end of a cosmic plateau
+        to mask.  If cosm_tail extends past the end of the image area, the
+        masking ends at the end of the row.  Defaults to 10.
+    desmear_flag : bool
+        If True, frame will be desmeared. Defaults to False.
+    rowreadtime : float
+        Time to read a single row for EXCAM, in seconds. Defaults to 223.5e-6.
 
     Attributes
     ----------
@@ -73,8 +85,9 @@ class Process(object):
     def __init__(self, bad_pix, eperdn, fwc_em_e, fwc_pp_e,
                  bias_offset, em_gain, exptime,
                  nonlin_path, meta_path=meta_path_default,
-                 dark=None, flat=None, sat_thresh=0.99, plat_thresh=0.85,
-                 cosm_filter=2):
+                 dark=None, flat=None, sat_thresh=0.7, plat_thresh=0.7,
+                 cosm_filter=1, cosm_box=3, cosm_tail=10,
+                 desmear_flag=False, rowreadtime=223.5e-6):
         check.twoD_array(bad_pix, 'bad_pix', TypeError)
         check.real_positive_scalar(eperdn, 'eperdn', TypeError)
         check.positive_scalar_integer(fwc_em_e, 'fwc_em_e', TypeError)
@@ -101,6 +114,11 @@ class Process(object):
         check.real_positive_scalar(sat_thresh, 'sat_thresh', TypeError)
         check.real_positive_scalar(plat_thresh, 'plat_thresh', TypeError)
         check.positive_scalar_integer(cosm_filter, 'cosm_filter', TypeError)
+        check.nonnegative_scalar_integer(cosm_box, 'cosm_box', TypeError)
+        check.nonnegative_scalar_integer(cosm_tail, 'cosm_tail', TypeError)
+        if type(desmear_flag) is not bool:
+            raise TypeError('The desmear flag must be a boolean')
+        check.real_positive_scalar(rowreadtime, 'rowreadtime', TypeError)
 
         self.bad_pix = bad_pix
         self.eperdn = eperdn
@@ -116,6 +134,10 @@ class Process(object):
         self.sat_thresh = sat_thresh
         self.plat_thresh = plat_thresh
         self.cosm_filter = cosm_filter
+        self.cosm_box = cosm_box
+        self.cosm_tail = cosm_tail
+        self.desmear_flag = desmear_flag
+        self.rowreadtime = rowreadtime
 
         # Read metadata file
         try:
@@ -159,7 +181,9 @@ class Process(object):
         bpmap : array_like
             Bad-pixel map flagging all bad pixels in that image.
             All unmasked pixels have the value 0, and all
-            masked pixels have the value 1.
+            masked pixels have the value 1. The cosmic ray masking per row can
+            go at furthest to the end of the row (and cannot wrap to the next
+            row).
         image_r : array_like
             Same as "image" but with the bad pixels removed (i.e., designated
             as zeros).
@@ -171,7 +195,9 @@ class Process(object):
         bpmap_frame : array_like
             Bad-pixel map flagging all bad pixels in that full frame.
             All unmasked pixels have the value 0, and all
-            masked pixels have the value 1.
+            masked pixels have the value 1.  The cosmic ray masking can
+            go to the end of a row and wrap to the next one if the tail is
+            chosen to be long enough.
         bias_frame : array_like
             Row-by-row bias estimate for the full prescan.
 
@@ -193,7 +219,8 @@ class Process(object):
         frame = frameobj.frame_bias0
         bpmap, bpmap_frame = frameobj.remove_cosmics(
                 sat_thresh=self.sat_thresh, plat_thresh=self.plat_thresh,
-                cosm_filter=self.cosm_filter)
+                cosm_filter=self.cosm_filter, cosm_box=self.cosm_box,
+                cosm_tail=self.cosm_tail)
         # Correct for nonlinearity
         image *= get_relgains(image, self.em_gain, self.nonlin_path)
         frame *= get_relgains(frame, self.em_gain, self.nonlin_path)
@@ -219,6 +246,7 @@ class Process(object):
          - Convert from DN to electrons
          - Divide by EM gain
          - Subtract bias-subtracted, gain-divided master dark in electrons
+         - Desmears frame if desmear_flag is set to True
          - Divide by corresponding flat field
          - Compute per-frame bad-pixel map from fixed bad pixel map (master bad
            pixel map constructed from calibration data such as dark and flat as
@@ -248,8 +276,8 @@ class Process(object):
             Bad-pixel map flagging all bad pixels in the frame, including
             known fixed bad pixels.
         L2b_image_r : array_like
-            Same as "image" but with the bad pixels removed (i.e., designated
-            as zeros).
+            Same as "L2b_image" but with the bad pixels removed
+            (i.e., designated as zeros).
 
         """
 
@@ -272,6 +300,19 @@ class Process(object):
         L2b_bpmap = np.logical_or(self.bad_pix, bpmap).astype(int)
 
         L2b_image -= self.dark
+
+        # Desmear
+        if self.desmear_flag:
+            smear = np.zeros_like(L2b_image)
+            m = len(smear)
+            for r in range(m):
+                columnsum = 0
+                for i in range(r+1):
+                    columnsum = (columnsum + self.rowreadtime/self.exptime*((1
+                    + self.rowreadtime/self.exptime)**((i+1)-(r+1)-1))*
+                    L2b_image[i,:])
+                smear[r,:] = columnsum
+            L2b_image -= smear
 
         # Divide by flat
         # Divide image by flat only where flat is not equal to 0.
@@ -408,8 +449,9 @@ def mean_combine(image_list, bpmap_list):
     comb_bpmap : array_like
         Mean-combined bad-pixel map.
 
-    mean_num_good_fr : int
-        Mean number of good, unmasked pixels.  Used for getting read
+    map_im : array-like
+        Array showing how many frames per pixel were unmasked.
+        Used for getting read
         noise in the calibration of the master dark.
 
     enough_for_rn : bool
@@ -487,6 +529,4 @@ def mean_combine(image_list, bpmap_list):
     if map_im.min() < len(image_list)/2:
         enough_for_rn = False
 
-    mean_num_good_fr = np.mean(map_im)
-
-    return comb_image, comb_bpmap, mean_num_good_fr, enough_for_rn
+    return comb_image, comb_bpmap, map_im, enough_for_rn

@@ -65,7 +65,7 @@ class TestTPumpAnalysis(unittest.TestCase):
             'test_data_mat_no_us')
         self.time_head = 'PHASE_T'
         self.emgain_head = 'EM_GAIN'
-        self.num_pumps = 10000
+        self.num_pumps = {1:10000,2:10000,3:10000,4:10000}
         self.input_T = 160 #in K; outside range of temps in test data, for fun
         # for sub frames:
         self.meta_path_sub = Path(here, '..', 'util', 'metadata_test.yaml')
@@ -335,7 +335,7 @@ class TestTPumpAnalysis(unittest.TestCase):
         # measured side of each inequality determines how many factors of eps
         # we pad by.
         # Introduce it here:
-        eps = np.finfo(np.float64).eps
+        eps = np.finfo(np.float32).eps
 
         (trap_dict, trap_densities, bad_fit_counter, pre_sub_el_count,
         unused_fit_data, unused_temp_fit_data, two_or_less_count,
@@ -1345,12 +1345,27 @@ class TestTPumpAnalysis(unittest.TestCase):
                 tpump_analysis(self.base_dir, perr, self.emgain_head,
                 self.num_pumps, self.meta_path_sub, None)
 
+    def test_num_pumps_dict(self):
+        '''num_pumps should be a dictionary.'''
+        num_pumps_err = [10000,10000,10000,10000]
+        with self.assertRaises(TypeError):
+            tpump_analysis(self.base_dir, self.time_head, self.emgain_head,
+                num_pumps_err, self.meta_path_sub, None)
+            
     def test_num_pumps(self):
         """num_pumps input bad."""
         for perr in ut_check.psilist:
+            num_pumps_err = {1:10000,2:perr,3:10000,4:10000}
             with self.assertRaises(TypeError):
                 tpump_analysis(self.base_dir, self.time_head, self.emgain_head,
-                perr, self.meta_path_sub, None)
+                num_pumps_err, self.meta_path_sub, None)
+
+    def test_num_pumps_keys(self):
+        """num_pumps keys should match scheme numbers, which are integers."""
+        num_pumps_err = {1:1000,2:2000,3:3000,5:4000}
+        with self.assertRaises(KeyError):
+            tpump_analysis(self.base_dir, self.time_head, self.emgain_head,
+            num_pumps_err, self.meta_path_sub, None)
 
     def test_meta_path(self):
         """meta_path input bad."""

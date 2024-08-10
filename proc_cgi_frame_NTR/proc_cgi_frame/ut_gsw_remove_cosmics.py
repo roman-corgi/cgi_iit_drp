@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for remove_cosmics."""
+"""Unit tests for gsw_remove_cosmics."""
 from __future__ import absolute_import, division, print_function
 
 import copy
@@ -16,6 +16,8 @@ fwc = 10000.
 sat_thresh = 0.99
 plat_thresh = 0.85
 cosm_filter = 2
+cosm_tail = 1024 # cosmic mask goes to end of row in all cases
+cosm_box = 0
 
 # Create a bias subtracted image with cosmics that cover all corner cases
 # Make a variety of plateaus
@@ -48,6 +50,7 @@ bs_image = np.ones((len(streak_row), 1000))
 bs_image_below_thresh = np.ones(bs_image.shape)
 bs_image_single_pix = np.ones(bs_image.shape)
 bs_image_two_cosm = np.ones(bs_image.shape)
+bs_image_box = np.ones(bs_image.shape)
 bs_image[i_streak_rows_t[0], 0:len(cosm_bs)] = cosm_bs
 bs_image[i_streak_rows_t[1], 50:50+len(cosm_bs)] = cosm_bs
 bs_image[i_streak_rows_t[1], 50+len(cosm_bs):50+len(cosm_bs)*2] = cosm_bs
@@ -55,6 +58,12 @@ bs_image[i_streak_rows_t[2], 51:51+len(cosm_bs)] = cosm_bs
 bs_image[i_streak_rows_t[3], bs_image.shape[1]-len(p_basic):] = p_basic
 bs_image_below_thresh[500, 50:50+len(not_cosm_bs)] = not_cosm_bs
 bs_image_single_pix[500, 500] = fwc
+bs_image_box[i_streak_rows_t[1], 50:50+len(cosm_bs)] = cosm_bs
+# these pixels surrounding the cosmic head would not get masked
+# unless cosm_box > 0; doesn't form a full box,
+# but the whole box should get masked
+bs_image_box[i_streak_rows_t[1]-2:i_streak_rows_t[1], 50-2:50+2+1] = \
+    0.6*fwc
 
 
 class TestRemoveCosmics(unittest.TestCase):
@@ -66,6 +75,8 @@ class TestRemoveCosmics(unittest.TestCase):
         self.sat_thresh = sat_thresh
         self.plat_thresh = plat_thresh
         self.cosm_filter = cosm_filter
+        self.cosm_box = cosm_box
+        self.cosm_tail = cosm_tail
 
         self.bs_image_below_thresh = bs_image_below_thresh
         self.bs_image_single_pix = bs_image_single_pix
@@ -82,9 +93,11 @@ class TestRemoveCosmics(unittest.TestCase):
     @patch.object(gsw_remove_cosmics,'find_plateaus')
     def test_called_find_plateaus(self, mock_find_plateaus):
         """Assert that find_plateaus is called for each streak row."""
-        mock_find_plateaus.return_value = 0 # i.e. index 0 starts each plateau
+        # i.e. index 0 starts each plateau
+        mock_find_plateaus.return_value = np.array([0])
         remove_cosmics(self.bs_image, self.fwc, self.sat_thresh,
-                       self.plat_thresh, self.cosm_filter)
+                       self.plat_thresh, self.cosm_filter, self.cosm_box,
+                       self.cosm_tail)
         self.assertEqual(mock_find_plateaus.call_count,
                          len(self.i_streak_rows_t))
 
@@ -94,7 +107,8 @@ class TestRemoveCosmics(unittest.TestCase):
         mock_find_plateaus.return_value = (np.array([], dtype=int),
                                            np.array([], dtype=int))
         remove_cosmics(self.bs_image_below_thresh, self.fwc, self.sat_thresh,
-                       self.plat_thresh, self.cosm_filter)
+                       self.plat_thresh, self.cosm_filter, self.cosm_box,
+                       self.cosm_tail)
         self.assertFalse(mock_find_plateaus.called)
 
     def test_mask(self):
@@ -102,10 +116,11 @@ class TestRemoveCosmics(unittest.TestCase):
         bs_image = np.ones_like(self.bs_image)
         bs_image[1, 2:2+len(self.cosm)] = self.cosm
         check_mask = np.zeros_like(self.bs_image, dtype=int)
-        check_mask[1, 1:] = 1  # Mask starts 1 before cosmic
+        check_mask[1, 2:] = 1
 
         mask = remove_cosmics(bs_image, self.fwc, self.sat_thresh,
-                              self.plat_thresh, self.cosm_filter)
+                            self.plat_thresh, self.cosm_filter, self.cosm_box,
+                            self.cosm_tail)
         np.testing.assert_array_equal(mask, check_mask)
 
 
@@ -113,14 +128,128 @@ class TestRemoveCosmics(unittest.TestCase):
         """Assert mask array is blank if no cosmic rows."""
         mask = remove_cosmics(self.bs_image_below_thresh, self.fwc,
                               self.sat_thresh, self.plat_thresh,
-                              self.cosm_filter)
+                              self.cosm_filter, self.cosm_box,
+                              self.cosm_tail)
         np.testing.assert_array_equal(mask, np.zeros(self.bs_image.shape))
+
+    def test_mask_box(self):
+        """Assert correct elements are masked, including the box around
+        the cosmic head and the specified cosmic tail."""
+        check_mask = np.zeros_like(self.bs_image, dtype=int)
+        check_mask[i_streak_rows_t[1]-2:i_streak_rows_t[1]+2+1,
+                   50-2:50+2+1] = 1
+        # choose cosm_tail >= effective length of simulated tail
+        # using cosm_filter=2 and cosm_tail=20:
+        check_mask[i_streak_rows_t[1], 50:50+2+20+1] = 1
+        check_mask = check_mask.astype(int)
+        mask = remove_cosmics(bs_image_box, self.fwc, self.sat_thresh,
+                            self.plat_thresh, self.cosm_filter, cosm_box=0,
+                            cosm_tail=20)
+
+        self.assertFalse(np.array_equal(mask, check_mask)) # since cosm_box=0
+
+        # now use cosm_box=2 to catch pixels surrounding head
+        mask2 = remove_cosmics(bs_image_box, self.fwc, self.sat_thresh,
+                            self.plat_thresh, self.cosm_filter, cosm_box=2,
+                            cosm_tail=20)
+
+        self.assertTrue(np.array_equal(mask2, check_mask))
+
+    def test_mask_box_corners(self):
+        """Assert correct elements are masked, including the box around
+        the cosmic head, when cosmic heads appear in corners."""
+        check_mask = np.zeros((10,10), dtype=int)
+        image = np.zeros((10,10), dtype=float)
+        # lower left corner (head #1)
+        image[-1,0:4] = fwc
+        # near lower left corner (head #2)
+        image[-2,1:4] = fwc
+        # upper right corner (head #3)
+        image[0,-1] = fwc
+
+        # cosmic head #1
+        check_mask[-1,0:] = 1
+        # tries for a 2x2 box around head in corner
+        check_mask[-3:,0:2] = 1
+        # cosmic head #2
+        check_mask[-2,1:] = 1
+        # tries for a 2x2 box around head
+        check_mask[-4:,0:4] = 1
+        # cosmic head #3 and attempted box around it
+        check_mask[0:3,-3:] = 1
+
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, self.cosm_filter, cosm_box=2,
+                            cosm_tail=self.cosm_tail)
+
+        self.assertTrue(np.array_equal(mask, check_mask))
+
+    def test_cosm_tail_2(self):
+        """Assert correct elements are masked when 2 cosmic rays are in
+        a single row.  cosm_box=0 for simplicity."""
+        check_mask = np.zeros((10,10), dtype=int)
+        image = np.zeros((10,10), dtype=float)
+        # head #1
+        image[-2,0:4] = fwc
+        # head #2
+        image[-2,6:9] = fwc
+
+        # for cosm_filter=2 and cosm_tail=1:
+        # head #1
+        check_mask[-2,0:0+2+1+1] = 1
+        # cosmic head #2
+        check_mask[-2,6:6+2+1+1] = 1
+
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=0,
+                            cosm_tail=1)
+
+        self.assertTrue(np.array_equal(mask, check_mask))
+
+        # for cosm_filter=2 and cosm_tail=3 (overlap due to masked tails):
+        # head #1
+        check_mask[-2,0:0+2+3+1] = 1
+        # cosmic head #2
+        check_mask[-2,6:6+2+3+1] = 1
+
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=0,
+                            cosm_tail=3)
+
+        self.assertTrue(np.array_equal(mask, check_mask))
+
+    def test_cosm_tail_bleed_over(self):
+        """Assert correct elements are masked when 2 cosmic rays are in
+        a single row."""
+        check_mask = np.zeros((10,10), dtype=int)
+        image = np.zeros((10,10), dtype=float)
+        # head
+        image[-2,6:9] = fwc
+
+        # cosmic head
+        check_mask[-2,6:] = 1
+        check_mask[-1,0:12] = 1 #bleed over (2+14-1st row of 4)
+        check_mask[-4:,4:9] = 1 # cosm_box=2
+
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=2,
+                            cosm_tail=14, mode='full')
+
+        self.assertTrue(np.array_equal(mask, check_mask))
+
+        # when mode not "full", no bleed over
+        check_mask[-1,0:12] = 0 # undo the bleed over
+        # cosm_box=2 again since I undid some in previous line
+        check_mask[-4:,4:9] = 1
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=2,
+                            cosm_tail=14)
+
+        self.assertTrue(np.array_equal(mask, check_mask))
 
 
 class TestFindPlateaus(unittest.TestCase):
     """Unit tests for find_plateaus function.
-
-    Remember that the value within i_beg is one pixel beyond the plateau edge.
     """
 
     def setUp(self):
@@ -146,7 +275,7 @@ class TestFindPlateaus(unittest.TestCase):
         self.streak_row[beg:beg+len(self.cosm)] = self.cosm
         i_beg = find_plateaus(self.streak_row, self.fwc, self.sat_thresh,
                               self.plat_thresh, self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg, beg)
 
 
     def test_left_edge_i_begs(self):
@@ -155,7 +284,7 @@ class TestFindPlateaus(unittest.TestCase):
         self.streak_row[beg:len(self.cosm)] = self.cosm
         i_beg = find_plateaus(self.streak_row, self.fwc, self.sat_thresh,
                               self.plat_thresh, self.cosm_filter)
-        self.assertEqual(i_beg, beg)
+        self.assertEqual(i_beg, np.array([beg]))
 
 
     def test_right_edge_i_begs(self):
@@ -165,7 +294,7 @@ class TestFindPlateaus(unittest.TestCase):
         self.streak_row[beg:] = cosm
         i_beg = find_plateaus(self.streak_row, self.fwc, self.sat_thresh,
                               self.plat_thresh, self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg, np.array([beg]))
 
 
     def test_two_cosm_i_begs(self):
@@ -175,10 +304,9 @@ class TestFindPlateaus(unittest.TestCase):
         self.streak_row[beg1:beg1 + len(self.cosm)] = self.cosm
         self.streak_row[beg2:beg2 + len(self.cosm)] = self.cosm
 
-        i_beg = find_plateaus(self.streak_row, self.fwc, self.sat_thresh,
+        i_begs = find_plateaus(self.streak_row, self.fwc, self.sat_thresh,
                               self.plat_thresh, self.cosm_filter)
-        self.assertEqual(i_beg, beg1-1)
-
+        self.assertTrue(np.array_equal(i_begs, np.array([beg1, beg2])))
 
     def test_p_small(self):
         """Verify that function ignores plateaus smaller than filter size."""
@@ -199,7 +327,7 @@ class TestFindPlateaus(unittest.TestCase):
         i_beg = find_plateaus(self.streak_row, self.fwc,
                               self.sat_thresh, self.plat_thresh,
                               self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg, np.array([beg]))
 
 
     def test_p_dip(self):
@@ -210,7 +338,7 @@ class TestFindPlateaus(unittest.TestCase):
         i_beg = find_plateaus(self.streak_row, self.fwc,
                               self.sat_thresh, self.plat_thresh,
                               self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg, np.array([beg]))
 
 
     def test_p_dip_deep(self):
@@ -222,7 +350,10 @@ class TestFindPlateaus(unittest.TestCase):
         i_beg = find_plateaus(self.streak_row, self.fwc,
                               self.sat_thresh, self.plat_thresh,
                               self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg[0], beg)
+        # also finds where the dip is when cosm_filter=2, and the dip is
+        # 2 away, which is 1 before the next plateau
+        self.assertEqual(i_beg[1], beg+3)
 
 
     def test_p_uneven(self):
@@ -233,7 +364,7 @@ class TestFindPlateaus(unittest.TestCase):
         i_beg = find_plateaus(self.streak_row, self.fwc,
                               self.sat_thresh, self.plat_thresh,
                               self.cosm_filter)
-        self.assertEqual(i_beg, beg-1)
+        self.assertEqual(i_beg, np.array([beg]))
 
 
     def test_p_below_min(self):

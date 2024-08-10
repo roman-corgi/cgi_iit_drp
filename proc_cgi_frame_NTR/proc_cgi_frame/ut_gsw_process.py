@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=unsubscriptable-object # pylint handles .shape poorly
-"""Unit tests for Process."""
+"""Unit tests for gsw_process."""
 # NOTE TO FSW: THIS MODULE IS ONLY USED BY THE GROUND PIPELINE, DO NOT PORT
 
 import copy
@@ -45,6 +45,8 @@ fwc_pp_e = 50000
 bias_offset = 0
 em_gain = 1
 exptime = 1
+desmear_flag = False
+rowreadtime = 223.5e-6
 
 # Create nonlin array to be written to csv
 # # Row headers are counts
@@ -75,6 +77,8 @@ nonlin_array[1:, 1:] = check_relgains
 sat_thresh = 0.99
 plat_thresh = 0.85
 cosm_filter = 2
+cosm_box = 3
+cosm_tail = 2200
 
 localpath = os.path.dirname(os.path.abspath(__file__))
 
@@ -89,7 +93,8 @@ class TestProcess(unittest.TestCase):
         """Verify input values are assigned correctly."""
         proc = Process(bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
                        em_gain, exptime, self.nonlin_path_ones, meta_path,
-                       dark, flat, sat_thresh, plat_thresh, cosm_filter)
+                       dark, flat, sat_thresh, plat_thresh, cosm_filter,
+                       cosm_box, cosm_tail, desmear_flag, rowreadtime)
 
         self.assertTrue(np.array_equal(proc.bad_pix, bad_pix))
         self.assertTrue(np.array_equal(proc.eperdn, eperdn))
@@ -105,6 +110,9 @@ class TestProcess(unittest.TestCase):
         self.assertTrue(np.array_equal(proc.sat_thresh, sat_thresh))
         self.assertTrue(np.array_equal(proc.plat_thresh, plat_thresh))
         self.assertTrue(np.array_equal(proc.cosm_filter, cosm_filter))
+        self.assertTrue(proc.cosm_box == cosm_box)
+        self.assertTrue(proc.desmear_flag == desmear_flag)
+        self.assertTrue(proc.rowreadtime == rowreadtime)
 
     def test_bad_pix(self):
         """bad_pix input bad."""
@@ -164,6 +172,33 @@ class TestProcess(unittest.TestCase):
                         em_gain, exptime, self.nonlin_path_ones,
                         meta_path, dark, flat,
                         cosm_filter=perr)
+
+    def test_cosm_box(self):
+        """cosm_box input bad."""
+        for perr in ut_check.nsilist:
+            with self.assertRaises(TypeError):
+                Process(bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                        em_gain, exptime, self.nonlin_path_ones,
+                        meta_path, dark, flat,
+                        cosm_box=perr)
+
+    def test_desmear_flag(self):
+        """desmear_flag input bad."""
+        perr = "foo"
+        with self.assertRaises(TypeError):
+            Process(bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                    em_gain, exptime, self.nonlin_path_ones,
+                    meta_path, dark, flat,
+                    cosm_filter, desmear_flag=perr)
+
+    def test_rowreadtime(self):
+        """row read time input bad."""
+        for perr in ut_check.rpslist:
+            with self.assertRaises(TypeError):
+                Process(bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                        em_gain, exptime, self.nonlin_path_ones,
+                        meta_path, dark, flat,
+                        cosm_filter, rowreadtime=perr)
 
     def test_em_gain(self):
         """em_gain input bad."""
@@ -276,9 +311,10 @@ class TestL1ToL2a(unittest.TestCase):
         self.full_active[0:2, 2:4] = fwc_em_e  # Fake hit
         self.full_active[0:2, 4] = fwc_em_e / 2  # Trigger end cosmic thresh
         self.full_active[0:2, 5:12] = 1.  # Fake tail
-        # start 1 pixel before hit as remove_cosmics oversizes the plateau by 1
         self.full_row_mask = np.zeros_like(frame_dn_zeros, dtype='int')
-        self.full_row_mask[0:2, 1:] = 1
+        self.full_row_mask[0:2, 2:] = 1
+        self.full_row_mask_10 = np.zeros_like(self.full_row_mask)
+        self.full_row_mask_10[0:2, 2:2+2+10+1] = 1
 
         self.full_frame = copy.copy(frame_dn_zeros)
         self.full_frame = self.full_active
@@ -292,9 +328,10 @@ class TestL1ToL2a(unittest.TestCase):
         self.active[0:2, 2:4] = fwc_em_e  # Fake hit
         self.active[0:2, 4] = fwc_em_e / 2  # Trigger end cosmic thresh
         self.active[0:2, 5:12] = 1.  # Fake tail
-        # start 1 pixel before hit as remove_cosmics oversizes the plateau by 1
         self.row_mask = np.zeros((image_rows, image_cols), dtype='int')
-        self.row_mask[0:2, 1:] = 1
+        self.row_mask[0:2, 2:] = 1
+        self.row_mask_10 = np.zeros_like(self.row_mask)
+        self.row_mask_10[0:2, 2:2+2+10+1] = 1
 
         self.frame = copy.copy(frame_dn_zeros)
         self.frame[image_ul[0]:image_ul[0]+image_rows,
@@ -322,31 +359,163 @@ class TestL1ToL2a(unittest.TestCase):
 
     def test_mask(self):
         """
-        Verify everything after CR hit is masked, and one pixel before
+        Verify everything after CR hit is masked
         """
         proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
                        em_gain, exptime, self.nonlin_path_ones, meta_path,
-                       self.dark, self.flat)
+                       self.dark, self.flat, cosm_filter=2, cosm_box=0,
+                       cosm_tail=1024)
         _, bad_mask, image_r, _, _, _, _ = proc.L1_to_L2a(self.frame)
-
+        # 1024 exceeds length to end of row, but still only masked up to end of
+        # row:
         self.assertTrue((bad_mask == self.row_mask).all())
         # ensure the image with CR removed is as expected:
         masked_rows, masked_cols = np.where(self.row_mask)
         self.assertTrue((image_r[masked_rows, masked_cols] == 0).all())
 
+        # now try cosm_tail=10
+        proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                       em_gain, exptime, self.nonlin_path_ones, meta_path,
+                       self.dark, self.flat, cosm_filter=2, cosm_box=0,
+                       cosm_tail=10)
+        _, bad_mask, image_r, _, _, _, _ = proc.L1_to_L2a(self.frame)
+
+        self.assertTrue((bad_mask == self.row_mask_10).all())
+        # ensure the image with CR removed is as expected:
+        masked_rows, masked_cols = np.where(self.row_mask_10)
+        self.assertTrue((image_r[masked_rows, masked_cols] == 0).all())
+
+    def test_mask_with_box(self):
+        """
+        Verify everything after CR hit is masked (with box)
+        """
+        proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                       em_gain, exptime, self.nonlin_path_ones, meta_path,
+                       self.dark, self.flat, cosm_filter=2, cosm_box=2,
+                       cosm_tail=1024)
+        _, bad_mask, image_r, _, _, _, _ = proc.L1_to_L2a(self.frame)
+        # account for pixels masked via cosm_box=2:
+        self.row_mask[0:4,0:5] = 1
+        # 1024 exceeds length to end of row, but still only masked up to end of
+        # row:
+        self.assertTrue((bad_mask == self.row_mask).all())
+        # ensure the image with CR removed is as expected:
+        masked_rows, masked_cols = np.where(self.row_mask)
+        self.assertTrue((image_r[masked_rows, masked_cols] == 0).all())
+
+        # now try cosm_tail=10
+        proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                       em_gain, exptime, self.nonlin_path_ones, meta_path,
+                       self.dark, self.flat, cosm_filter=2, cosm_box=2,
+                       cosm_tail=10)
+        _, bad_mask, image_r, _, _, _, _ = proc.L1_to_L2a(self.frame)
+        # account for pixels masked via cosm_box=2:
+        self.row_mask_10[0:4,0:5] = 1
+        self.assertTrue((bad_mask == self.row_mask_10).all())
+        # ensure the image with CR removed is as expected:
+        masked_rows, masked_cols = np.where(self.row_mask_10)
+        self.assertTrue((image_r[masked_rows, masked_cols] == 0).all())
+
     def test_full_mask(self):
         """
-        Verify everything after CR hit is masked, and one pixel before (for
+        Verify everything after CR hit is masked (for
         full frame)
         """
+        # head starts from column 1 (from def of self.full_frame)
+        # to end of row
         proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
                        bias_offset, em_gain, exptime,
                        self.nonlin_path_ones, meta_path,
-                       self.full_dark, self.full_flat)
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=0,
+                       cosm_tail=(2200-1)-1-2) #index 2199 - col 1 -cosm_filter
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
 
         self.assertTrue((bad_mask == self.full_row_mask).all())
 
+        # now try cosm_tail=10
+        proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
+                       bias_offset, em_gain, exptime,
+                       self.nonlin_path_ones, meta_path,
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=0,
+                       cosm_tail=10)
+        _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
+
+        self.assertTrue((bad_mask == self.full_row_mask_10).all())
+
+
+    def test_full_mask_with_box(self):
+        """
+        Verify everything after CR hit is masked (with box, for full frame)
+        """
+        # head starts from column 1 (from def of self.full_frame)
+        # to end of row
+        proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
+                       bias_offset, em_gain, exptime,
+                       self.nonlin_path_ones, meta_path,
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=2,
+                       cosm_tail=(2200-1)-1-2) #index 2199 - col 1 -cosm_filter
+        _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
+        # account for pixels masked via cosm_box=2:
+        self.full_row_mask[0:4,0:5] = 1
+        self.assertTrue((bad_mask == self.full_row_mask).all())
+
+        # now try cosm_tail=10
+        proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
+                       bias_offset, em_gain, exptime,
+                       self.nonlin_path_ones, meta_path,
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=2,
+                       cosm_tail=10)
+        _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
+        # account for pixels masked via cosm_box=2:
+        self.full_row_mask_10[0:4,0:5] = 1
+        self.assertTrue((bad_mask == self.full_row_mask_10).all())
+
+    def test_full_mask_bleed_over(self):
+        """
+        Verify everything after CR hit is masked (for
+        full frame). This CR bleeds into next row.
+        """
+        # head starts from column 2 (from def of self.full_frame)
+        # to end of row, then 3 more in next row (cosm_filter=2)
+        cosm_tail = 2200-2-2+3
+        proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
+                       bias_offset, em_gain, exptime,
+                       self.nonlin_path_ones, meta_path,
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=0,
+                       cosm_tail=cosm_tail)
+
+        _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
+        # cosmic starting at col 2 in rows 0 and 1
+        self.full_row_mask[1, 0:3] = 1 # 3 extra pixels masked on next row
+        self.full_row_mask[2, 0:3] = 1 # 3 extra pixels masked on next row
+        self.assertTrue((bad_mask == self.full_row_mask).all())
+
+    def test_full_mask_bleed_over_2(self):
+        """
+        Verify everything after CR hit is masked (for
+        full frame). This CR bleeds into next 2 rows.
+        """
+        # head starts from column 2 (from def of self.full_frame)
+        # to end of row, then 3 more in next row (cosm_filter=2)
+        cosm_tail = 2200-2-2+2203 #additional 3 into next row
+        proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
+                       bias_offset, em_gain, exptime,
+                       self.nonlin_path_ones, meta_path,
+                       self.full_dark, self.full_flat, cosm_filter=2,
+                       cosm_box=0,
+                       cosm_tail=cosm_tail)
+
+        _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
+        # cosmic starting at col 2 in rows 0 and 1
+        self.full_row_mask[1, 0:3] = 1 # 3 extra pixels masked on next row
+        self.full_row_mask[2, 0:] = 1 # fills up the whole next row
+        self.full_row_mask[3, 0:3] = 1 # 3 extra pixels masked on next row
+        self.assertTrue((bad_mask == self.full_row_mask).all())
 
     def test_nonlin_fixed_gain(self):
         """Verify function multiplies by relative gain."""
@@ -564,6 +733,56 @@ class TestL2aToL2b(unittest.TestCase):
 
         self.assertTrue(np.max(np.abs(image - image0)) < tol)
 
+    def test_desmear_value(self):
+        """Verify that desmearing algorithm returns the expected value."""
+        tol = 1e-13
+        e_t=1
+
+        reference_frame = np.zeros_like(self.frame)
+        reference_frame[0,:] = 1
+        smeared_frame = e_t*reference_frame + rowreadtime
+
+        proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                       em_gain, e_t, self.nonlin_path_ones, meta_path,
+                       self.dark, self.flat, desmear_flag=True)
+        #changes nothing, except frame is cropped.
+        i0, b0, _, _, _, _, _ = proc.L1_to_L2a(smeared_frame)
+        i1, b1, _, _, _, _, _ = proc.L1_to_L2a(e_t*reference_frame)
+
+        desmeared_frame, _, _ = proc.L2a_to_L2b(i0, b0)
+
+        self.assertTrue(np.max(np.abs(desmeared_frame - i1)) < tol)
+
+    def test_desmear_noise(self):
+        """Verify that desmearing algorithm is not affected by noise at sufficiently high exposure times."""
+        tol = 1e-3*fwc_em_e/2 #percentage of the lowest active value in self.frame
+        e_t=60
+        noise_std = 120
+
+        smear = np.zeros_like(self.frame)
+        m = len(smear)
+        for r in range(m):
+            columnsum = 0
+            for i in range(r+1):
+                columnsum = columnsum + rowreadtime*self.frame[i,:]
+            smear[r,:] = columnsum
+
+        smeared_frame = e_t*self.frame + smear
+
+        noise_map = noise_std*np.random.normal(0, 1, size=self.frame.shape)
+        noise_frame = self.frame + noise_map
+        L2aSize_noise_frame = noise_frame[image_ul[0]:image_ul[0]+image_rows,
+                   image_ul[1]:image_ul[1]+image_cols]
+        noisy_smeared_frame = smeared_frame + noise_map
+
+        proc = Process(self.bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
+                       em_gain, e_t, self.nonlin_path_ones, meta_path,
+                       self.dark, self.flat, desmear_flag=True)
+        i0, b0, _, _, _, _, _ = proc.L1_to_L2a(noisy_smeared_frame)
+        desmeared_frame, _, _ = proc.L2a_to_L2b(i0, b0)
+
+        self.assertTrue(np.mean(np.abs(desmeared_frame - L2aSize_noise_frame)) < tol)
+
 
     def test_flat(self):
         """Verify flat is being divided."""
@@ -637,7 +856,7 @@ class TestL2aToL2b(unittest.TestCase):
         check_bad_pix = copy.copy(self.row_mask)  # Same locations as cosm
         proc = Process(check_bad_pix, eperdn, fwc_em_e, fwc_pp_e, bias_offset,
                        em_gain, exptime, self.nonlin_path_ones, meta_path,
-                       self.dark, self.flat)
+                       self.dark, self.flat, cosm_box=0)
         i0, b0, _, _, _, _, _ = proc.L1_to_L2a(self.frame)
         _, bad_mask, image_r = proc.L2a_to_L2b(i0, b0)
 
@@ -901,14 +1120,18 @@ class TestMeanCombine(unittest.TestCase):
         self.assertTrue(enough_for_rn == False)
 
 
-    def test_darks_mean_num_good_fr(self):
-        """mean_num_good_fr as expected."""
-        _, _, mean_num_good_fr, _  = mean_combine(self.check_ims,
+    def test_darks_map_im(self):
+        """map_im as expected."""
+        _, _, map_im, _  = mean_combine(self.check_ims,
                                                 self.one_fr_mask)
         # 99 pixels with no mask on any of the 3 frames, one with one
         # frame masked
+        # one pixel masked on one frame:
+        self.assertTrue(np.where(map_im == 2)[0].size == 1)
+        # 99 pixels not masked on all 3 frames:
+        self.assertTrue(np.where(map_im == 3)[0].size == map_im.size - 1)
         expected_mean_num_good_fr = (3*99 + 2)/100
-        self.assertEqual(mean_num_good_fr, expected_mean_num_good_fr)
+        self.assertEqual(np.mean(map_im), expected_mean_num_good_fr)
 
 
     def test_invalid_image_list(self):
