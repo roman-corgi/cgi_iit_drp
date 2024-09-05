@@ -12,6 +12,7 @@ R^2 of about 0.75).
 
 import os
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import warnings
 import numpy as np
@@ -58,7 +59,7 @@ k_arr = eperdn*np.ones_like(g_arr) # all the same
 #added in after emccd_detect makes the frames (see below)
 FPN = 21 # e
 # number of frames in each sub-stack of stack_arr:
-N = 600 #30; can also replace with 30 to use those sub-stacks in the
+N = 30#600 #30; can also replace with 30 to use those sub-stacks in the
 #testdata_small folder; for 30, R_map will be smaller per pixel b/c of big
 # variance, and F, C, and D will have more variance with respect to their
 # expected values.  No need to test both here;  just N=600 case is sufficient.
@@ -102,21 +103,30 @@ class TestCalibrateDarksLSQ(unittest.TestCase):
         # filter out expected warnings
         warnings.filterwarnings('ignore', category=UserWarning,
             module='cal.calibrate_darks.calibrate_darks_lsq')
+        # filter out expected warning when unreliable_pix_map has a pixel 
+        # masked for all sub-stacks (which makes Rsq NaN from a division by 0)
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+            module='cal.calibrate_darks.calibrate_darks_lsq')
 
     def test_expected_results_sub(self):
         """Outputs are as expected, for smaller-sized frames."""
         nonlin_path = Path(here, '..', 'util', 'testdata',
                 'ut_nonlin_array_ones.txt') # does no corrections
+        # using the Process class's defaults for the cosmic parameters
         (F_map, C_map, D_map, bias_offset,
         F_image_map, C_image_map, D_image_map,
-        Fvar, Cvar, Dvar, read_noise, R_map,
-        F_image_mean, C_image_mean, D_image_mean) = \
+        _, _, _, read_noise, R_map,
+        F_image_mean, C_image_mean, D_image_mean, unreliable_pix_map) = \
         calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
             self.k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
-            nonlin_path, self.Nem)
+            nonlin_path, self.Nem, 
+            sat_thresh=0.99, plat_thresh=0.85, cosm_filter=2, cosm_box=0,
+            cosm_tail=40)
         # F
-        self.assertTrue(np.isclose(np.mean(F_image_map), FPN, atol=FPN/10))
-        self.assertTrue(np.isclose(F_image_mean, FPN, atol=FPN/10))
+        self.assertTrue(np.isclose(np.mean(F_image_map), FPN//eperdn*eperdn, 
+                                   atol=FPN/10))
+        self.assertTrue(np.isclose(F_image_mean, FPN//eperdn*eperdn, 
+                                   atol=FPN/10))
         # No FPN was inserted in non-image areas (so that bias subtraction
         #wouldn't simply remove it), so it should be 0 in prescan
         F_prescan_map = meta_sub.slice_section(F_map, 'prescan')
@@ -142,7 +152,7 @@ class TestCalibrateDarksLSQ(unittest.TestCase):
         # now whole map should be 0
         self.assertTrue(np.nanmin(D_map) == 0)
         # read_noise
-        self.assertTrue(np.isclose(read_noise, 100, atol=2))
+        self.assertTrue(np.isclose(read_noise, 100, rtol=0.1))
         # adjusted R^2:  acceptable fit (the higher N is, the better the fit)
         if N == 30:
             # bias_offset (tolerance of 5 for N=30 since I used a small number
@@ -152,12 +162,16 @@ class TestCalibrateDarksLSQ(unittest.TestCase):
         if N == 600:
             self.assertTrue(np.isclose(bias_offset, 0, atol=1)) #in DN
             self.assertTrue(np.nanmean(R_map) > 0.7)
+        # no unusable pixels
+        self.assertTrue((unreliable_pix_map == 0).size 
+                        == unreliable_pix_map.size)
 
     def test_telem_rows_success(self):
         '''Successful run with telem_rows specified.'''
         calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
             self.k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
-            nonlin_path, self.Nem, telem_rows=slice(-5,120))
+            nonlin_path, self.Nem, telem_rows=slice(-5,120), 
+            desmear_flags=None, rowreadtime=1)
 
     def test_4D(self):
         """stack_arr should be 4-D."""
@@ -325,21 +339,64 @@ class TestCalibrateDarksLSQ(unittest.TestCase):
             calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
                 self.k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
                 nonlin_path, self.Nem, telem_rows=slice(90,91))
-
-    def test_mean_num(self):
-        '''If too many masked in a stack for a given pixel, exception raised.
-        '''
-        stack = np.random.randint(0, 200, size=(3,3,
-                                    meta_sub.frame_rows, meta_sub.frame_cols))
-        # now tag 2 of the 3 sub-stacks with cosmic-affected pixels all the
-        # way through for one pixel
-        stack[0][0:2,0,0] = self.fwc_pp_e/self.k_arr[0]
-        with self.assertRaises(CalDarksLSQException):
-            calibrate_darks_lsq(stack, self.g_arr, self.t_arr,
+        
+    def test_desmear_flags_list(self):
+        '''desmear_flags not a list.'''
+        desmear_flags = [False]*49 
+        err = tuple(desmear_flags) # not a list
+        with self.assertRaises(TypeError):
+            calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
                 self.k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
-                self.nonlin_path, self.Nem)
+                nonlin_path, self.Nem, desmear_flags=err)
 
-
+    def test_desmear_flags_len(self):
+        '''desmear_flags has wrong length.'''
+        err = [False]*10 # wrong length
+        with self.assertRaises(ValueError):
+            calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
+                self.k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
+                nonlin_path, self.Nem, desmear_flags=err)
+            
+    def test_mean_num(self):
+        '''If too many masked in a stack for a given pixel, warning raised.
+        '''
+        stack = np.random.randint(0, 200, size=(6,3,
+                                    meta_sub.frame_rows, meta_sub.frame_cols))
+        g_arr = np.array([2,3,4,5,6,7])
+        t_arr = np.array([10,11,12,13,14,15])
+        k_arr = np.array(6*[7])
+        # now tag 1 of the frames in the first sub-stack 
+        # with cosmic-affected pixels for one pixel; not masked since < 3/2 of 
+        # frames for that sub-stack are bad
+        stack[0,0:1,0,0] = 2*self.fwc_pp_e/k_arr[0]
+        # now tag 4 sub-stacks for all frames for (12,12)
+        stack[0:4,:,12,12] = 2*self.fwc_pp_e/k_arr[0]
+        # now tag all 6 sub-stacks for (33,33), and RuntimeWarning raised 
+        # b/c of divisison by 0 in Rsq, which is useful feedback in this case
+        stack[0:6,:,33,33] = 2*self.fwc_pp_e/k_arr[0]
+        with self.assertWarns(UserWarning):
+            out = calibrate_darks_lsq(stack, g_arr, t_arr,
+                k_arr, self.fwc_em_e, self.fwc_pp_e, self.meta_path_sub,
+                self.nonlin_path, self.Nem,
+                sat_thresh=0.99, plat_thresh=0.85, cosm_filter=2, cosm_box=0)
+        # unreliable_pix_map:
+        unreliable_pix_map = out[-1]
+        self.assertTrue(unreliable_pix_map[0,0] == 0)
+        self.assertTrue(unreliable_pix_map[12,12] == 4)
+        self.assertTrue(unreliable_pix_map[33,33] == 6)
+    
+    @patch('numpy.corrcoef')
+    def test_read_noise_nan(self, corrcoef):
+        '''If read_noise2 < 0, NaN returned for read_noise, and a warning 
+        is issued.'''
+        # high value to make read_noise2 < 0
+        corrcoef.side_effect = [2*np.ones((3,3))] 
+        with self.assertWarns(UserWarning):
+            out = calibrate_darks_lsq(stack_arr_sub_fr, self.g_arr, self.t_arr,
+                    self.k_arr, self.fwc_em_e, self.fwc_pp_e, 
+                    self.meta_path_sub, self.nonlin_path, self.Nem)
+        # read_noise
+        self.assertTrue(np.isnan(out[10]))
 
 
 if __name__ == '__main__':
