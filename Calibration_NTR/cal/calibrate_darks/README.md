@@ -36,8 +36,8 @@ fixed-pattern and CIC residual in the raw frame prescan region.
 The main function call is given below:
 `(F_map, C_map, D_map, bias_offset, F_image_map, C_image_map, D_image_map,
     Fvar, Cvar, Dvar, read_noise, R_map, F_image_mean, C_image_mean,
-    D_image_mean) = calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr,
-    fwc_em_e, fwc_pp_e, meta_path, nonlin_path, Nem)`
+    D_image_mean, unreliable_pix_map) = calibrate_darks_lsq(stack_arr, g_arr, 
+    t_arr, k_arr, fwc_em_e, fwc_pp_e, meta_path, nonlin_path, Nem)`
 
 If you would like to run simulated data through the function, see
 the bottom of `calibrate_darks_lsq.py` for an example.  See the doc string for

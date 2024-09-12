@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for calibrate_hvon."""
+"""Unit tests for gsw_emccd_frame."""
 
 import os
 import unittest
@@ -229,7 +229,14 @@ class TestRemoveCosmics(unittest.TestCase):
         self.sat_thresh = 0.99
         self.plat_thresh = 0.85
         self.cosm_filter = 2
+        self.cosm_box = 0
+        self.cosm_tail = 2200
         pass
+
+    def test_cosm_box_works(self):
+        '''Verify method works fine for non-zero cosm_box.'''
+        self.frame.remove_cosmics(self.sat_thresh, self.plat_thresh,
+                                  self.cosm_filter, cosm_box=2, cosm_tail=15)
 
 
     def test_mask(self):
@@ -241,7 +248,8 @@ class TestRemoveCosmics(unittest.TestCase):
         frame_bias0[1:3, 5:] = 1.  # Fake tail
         self.frame.frame_bias0 = frame_bias0
         frame_mask = np.zeros_like(frame_bias0, dtype=int)
-        frame_mask[1:3, 1:] = 1 # Mask starts 1 before cosmic
+        # cosm_filter=2,cosm_tail=10, and mask starts at 2
+        frame_mask[1:3, 2:2+2+10+1] = 1
 
         # image area
         image_bias0 = np.zeros((meta.geom['image']['rows'],
@@ -251,10 +259,12 @@ class TestRemoveCosmics(unittest.TestCase):
         image_bias0[1:3, 5:] = 1.  # Fake tail
         self.frame.image_bias0 = image_bias0
         image_mask = np.zeros_like(image_bias0, dtype=int)
-        image_mask[1:3, 1:] = 1  # Mask starts 1 before cosmic
+        # cosm_filter=2,cosm_tail=10, and mask starts at 2
+        image_mask[1:3, 2:2+2+10+1] = 1
 
         image_outmask, frame_outmask= self.frame.remove_cosmics(
-                self.sat_thresh, self.plat_thresh, self.cosm_filter)
+                self.sat_thresh, self.plat_thresh, cosm_filter=2,
+                cosm_box=self.cosm_box, cosm_tail=10)
         self.assertTrue((frame_mask == frame_outmask).all())
         self.assertTrue((image_mask == image_outmask).all())
         pass
@@ -290,7 +300,8 @@ class TestRemoveCosmics(unittest.TestCase):
 
         image_outmask, frame_outmask = self.frame.remove_cosmics(
             sat_thresh=1.0, plat_thresh=self.plat_thresh,
-            cosm_filter=self.cosm_filter)
+            cosm_filter=self.cosm_filter, cosm_box=self.cosm_box,
+            cosm_tail=self.cosm_tail)
         self.assertTrue((frame_mask == frame_outmask).all())
         self.assertTrue((image_mask == image_outmask).all())
         pass
@@ -325,14 +336,16 @@ class TestRemoveCosmics(unittest.TestCase):
         frame_mask = np.zeros_like(frame_bias0, dtype=int)
         image_mask = np.zeros_like(image_bias0, dtype=int)
 
-        frame_mask[1:3, 1:] = 1  # Mask starts 1 before cosmic
+        # cosm_filter=2,cosm_tail=10, and mask starts at 2
+        frame_mask[1:3, 2:2+2+10+1] = 1
         frame_mask[8, 8] = 1  # Isolated pixels remove only those pixels
-        image_mask[1:3, 1:] = 1  # Mask starts 1 before cosmic
+        image_mask[1:3, 2:2+2+10+1] = 1
         image_mask[8, 8] = 1  # Isolated pixels remove only those pixels
 
         image_outmask, frame_outmask = self.frame.remove_cosmics(
             sat_thresh=1.0, plat_thresh=self.plat_thresh,
-            cosm_filter=self.cosm_filter)
+            cosm_filter=2, cosm_box=self.cosm_box,
+            cosm_tail=10)
         self.assertTrue((frame_mask == frame_outmask).all())
         self.assertTrue((image_mask == image_outmask).all())
         pass
@@ -372,7 +385,8 @@ class TestRemoveCosmics(unittest.TestCase):
 
         image_outmask, frame_outmask = self.frame.remove_cosmics(
             sat_thresh=1.0, plat_thresh=self.plat_thresh,
-            cosm_filter=self.cosm_filter)
+            cosm_filter=self.cosm_filter, cosm_box=self.cosm_box,
+            cosm_tail=self.cosm_tail)
         self.assertTrue((frame_mask == frame_outmask).all())
         self.assertTrue((image_mask == image_outmask).all())
         pass
@@ -405,17 +419,19 @@ class TestRemoveCosmics(unittest.TestCase):
         image_bias0[8, 8] = self.fwc_pp*self.em_gain # isolated pixel
         self.frame.image_bias0 = image_bias0
 
+        # cosm_filter=2,cosm_tail=10, and mask starts at 2
         frame_mask = np.zeros_like(frame_bias0, dtype=int)
-        frame_mask[1:3, 1:] = 1  # Mask starts 1 before cosmic
+        frame_mask[1:3, 2:2+2+10+1] = 1
         frame_mask[8, 8] = 1  # Isolated pixels remove only those pixels
-
+        # cosm_filter=2,cosm_tail=10, and mask starts at 2
         image_mask = np.zeros_like(image_bias0, dtype=int)
-        image_mask[1:3, 1:] = 1  # Mask starts 1 before cosmic
+        image_mask[1:3, 2:2+2+10+1] = 1
         image_mask[8, 8] = 1  # Isolated pixels remove only those pixels
 
         image_outmask, frame_outmask = self.frame.remove_cosmics(
             sat_thresh=1.0, plat_thresh=self.plat_thresh,
-            cosm_filter=self.cosm_filter)
+            cosm_filter=2, cosm_box=self.cosm_box,
+            cosm_tail=10)
         self.assertTrue((frame_mask == frame_outmask).all())
         self.assertTrue((image_mask == image_outmask).all())
         pass

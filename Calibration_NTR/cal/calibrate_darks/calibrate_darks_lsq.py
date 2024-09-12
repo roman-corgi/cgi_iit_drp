@@ -14,7 +14,9 @@ class CalDarksLSQException(Exception):
     """Exception class for calibrate_darks_lsq."""
 
 def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
-            meta_path, nonlin_path, Nem = 604, telem_rows=None):
+            meta_path, nonlin_path, Nem = 604, telem_rows=None, 
+            sat_thresh=0.7, plat_thresh=0.7, cosm_filter=1, cosm_box=3,
+            cosm_tail=10, desmear_flags=None, rowreadtime=223.5e-6):
     """Given an array of frame stacks of the same number of dark frames (in DN
     units), where the stacks are for various EM gain values and exposure times,
     this function subtracts the bias from each frame in each stack, masks for
@@ -82,6 +84,44 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
         The specified slice of rows in all frames where the telemetry rows lie.
         If None, the last 4 rows are used.  Defaults to None.
 
+    sat_thresh : float
+        Multiplication factor for full well capacity 
+        that determines saturated cosmic pixels.  Used in removing cosmic 
+        rays.  Defaults to 0.7.
+
+    plat_thresh : float
+        Multiplication factor for full well capacity 
+        that determines edges of cosmic plateau.  Used in removing cosmic 
+        rays.  Defaults to 0.7.
+
+    cosm_filter : int
+        Minimum length in pixels of cosmic plateaus to be identified. 
+        Used in removing cosmic rays.  Defaults to 1.
+
+    cosm_box : int
+        Number of pixels out from an idenified cosmic head (i.e., beginning of
+        the plateau) to mask out.
+        For example, if cosm_box is 3, a 7x7 box is masked,
+        with the cosmic head as the center pixel of the box.  Defaults to 3.
+
+    cosm_tail : int
+        Number of pixels in the row downstream of the end of a cosmic plateau
+        to mask.  If cosm_tail extends past the end of the image area, the
+        masking ends at the end of the row.  Defaults to 10.
+
+    desmear_flags : list 
+        Each element of the list must be boolean indicating whether to desmear 
+        (True) a corresponding stack in stack_arr or not (False). Under normal
+        circumstances, darks should not be desmeared.  The only time this input
+        would be useful is in the unexpected case that, for example, 
+        dark current is so high that it stands far above other noise that is 
+        not smeared.  If None, the list length matches that of stack_arr and 
+        is False in every list element.  Defaults to None. 
+
+    rowreadtime : float
+        Time to read a single row for EXCAM, in seconds. Only used if 
+        desmearing is used via desmear_flags.  Defaults to 223.5e-6.
+
     Returns
     -------
     F_map : array-like (full frame)
@@ -125,26 +165,41 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
         Read noise estimate from the noise profile of a mean frame (in e-).
         It's read off from the sub-stack with the lowest product of EM gain and
         frame time so that the gained variance of C and D is comparable to or
-        lower than read noise variance, thus making reading it off doable.
+        lower than read noise variance, thus making reading it off doable.  
+        If read_noise is returned as NaN, the read noise estimate is not 
+        trustworthy, possibly because not enough frames were used per substack
+        for that or because the next lowest gain setting is much larger than 
+        the gain used in the sub-stack. 
 
     R_map : array-like
         A per-pixel map of the adjusted coefficient of determination
         (adjusted R^2) value for the fit.
 
     F_image_mean : float
-        F averaged over all pixels,
-        before any negative ones are made positive.  Should be roughly the same
+        F averaged over all image-area pixels.  This is the same
         as taking the mean of F_image_map.  This is just for comparison.
 
     C_image_mean : float
-        C averaged over all pixels,
+        C averaged over all image-area pixels,
         before any negative ones are made positive.  Should be roughly the same
         as taking the mean of C_image_map.  This is just for comparison.
 
     D_image_mean : float
-        D averaged over all pixels,
+        D averaged over all image-area pixels,
         before any negative ones are made positive.  Should be roughly the same
         as taking the mean of D_image_map.  This is just for comparison.
+
+    unreliable_pix_map : array-like (full frame)
+        A pixel value in this array indicates how many sub-stacks are usable 
+        for a fit for that pixel.  For each sub-stack for which 
+        a pixel is masked for more than half of 
+        the frames in the sub-stack, 1 is added to that pixel's value 
+        in unreliable_pix_map.  Since the least-squares fit function has 3 
+        parameters, at least 4 sub-stacks are needed for a given pixel in order
+        to perform a fit for that pixel.  The pixels in unreliable_pix_map that 
+        are >= len(stack_arr)-3 cannot be fit.  
+
+
     """
     #input checks
     if type(stack_arr) != np.ndarray:
@@ -206,6 +261,15 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
     check.positive_scalar_integer(Nem, 'Nem', TypeError)
     # no checks on meta_path and nonlin_path since they will fail soon into
     # the code if they aren't right
+    # no checks on the cosmic parameters or rowreadtime or the bools in the 
+    # list desmear_flags since Process class checks them
+    if desmear_flags is None:
+        desmear_flags = [False]*len(stack_arr)
+    if not isinstance(desmear_flags, list):
+        raise TypeError('desmear_flags must be a list.')
+    if len(desmear_flags) != len(stack_arr):
+        raise ValueError('The lengths of desmear_flags and stack_arr must be '
+                         'the same.')
     if telem_rows is not None:
         if not isinstance(telem_rows, slice):
             raise TypeError('telem_rows must be a slice or None.')
@@ -221,12 +285,18 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
     proc_dark = {}
     mean_frames = []
     mean_num_good_fr = []
+    unreliable_pix_map = np.zeros_like(stack_arr[0][0]).astype(int)
     for i in range(len(stack_arr)):
         proc_dark[i] = Process(bad_pix=bad_pix, eperdn=k_arr[i],
                                fwc_em_e=fwc_em_e, fwc_pp_e=fwc_pp_e,
                                bias_offset=0, em_gain=g_arr[i],
                                exptime=t_arr[i], nonlin_path=nonlin_path,
-                               meta_path=meta_path)
+                               meta_path=meta_path, sat_thresh=sat_thresh,
+                               plat_thresh=plat_thresh, 
+                               cosm_filter=cosm_filter, cosm_box=cosm_box,
+                               cosm_tail=cosm_tail, 
+                               desmear_flag=desmear_flags[i],
+                               rowreadtime=rowreadtime)
         frames = []
         bpmaps = []
         for fr in stack_arr[i]:
@@ -247,16 +317,43 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
             f1[telem_rows] = 0 
             frames.append(f1)
             bpmaps.append(b1)
-        mean_frame, _, mean_num, rn_bool = mean_combine(frames, bpmaps)
-        if not rn_bool: # if False, due to cosmics
-            raise CalDarksLSQException('fewer than half the frames '
-            'available for at least one pixel in the averaging due to masking'
-            ', so cannot effectively determine noise maps for all pixels')
-        # now safe to mark telemetry rows as NaN again
+        mean_frame, _, map_im, _ = mean_combine(frames, bpmaps)
+        pixel_mask = (map_im < len(stack_arr[i])/2).astype(int)
+        mean_num = np.mean(map_im)
         mean_frame[telem_rows] = np.nan
         mean_frames.append(mean_frame)
         mean_num_good_fr.append(mean_num)
+        unreliable_pix_map += pixel_mask
     mean_stack = np.stack(mean_frames)
+    if (unreliable_pix_map >= len(stack_arr)-3).any():
+        warnings.warn('At least one pixel was masked for more than half of '
+                      'the frames in some sub-stacks, leaving 3 or fewer '
+                      'sub-stacks that did not suffer this masking for these '
+                      'pixels, which means the fit was unreliable for '
+                      'these pixels.  These are the pixels in the output '
+                      'unreliable_pixel_map that are >= len(stack_arr)-3.')
+    
+    # need the correlation coefficient for FPN for read noise estimate later;
+    # other noise sources aren't correlated frame to frame
+    # Use correlation b/w mean stacks since read noise is negligible (along 
+    # with dark current and CIC); correlation b/w mean stacks then 
+    # approximately equal to the correlation b/w FPN from stack to stack
+    # this is the stack that will be used later for estimating read noise:
+    min1 = np.argmin(g_arr*t_arr)
+    # getting next "closest" stack for finding correlation b/w FPN maps:
+    # same time, next gain up from least gain (close in time*gain but different
+    # gain so that effective read noise values are more uncorrelated)
+    tinds = np.where(t_arr == t_arr[min1])
+    nextg = g_arr[g_arr > g_arr[min1]].min()
+    ginds = np.where(g_arr == nextg)
+    intersect = np.intersect1d(tinds, ginds)
+    if intersect.size > 0:
+        min2 = intersect[0]
+    else: # just get next smallest g_arr*t_arr
+        min2 = np.where(np.argsort(g_arr*t_arr) == 1)[0][0]
+    msi = proc_dark[i].meta.imaging_slice(mean_stack[min1])
+    msi2 = proc_dark[i].meta.imaging_slice(mean_stack[min2])
+    avg_corr = np.corrcoef(msi.ravel(), msi2.ravel())[0, 1]
 
     # number of observations (i.e., # of averaged stacks provided for fit)
     M = len(g_arr)
@@ -333,10 +430,21 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
     Num = mean_num_good_fr[l]
     # take std of just image area; more variance if image and different regions
     # included; below assumes no variance inherent in FPN
+    
     mean_stack_image = proc_dark[l].meta.imaging_slice(mean_stack[l])
-    read_noise = np.sqrt(np.std(mean_stack_image)**2*Num -
-            ENF(g_arr[l], Nem)**2*g_arr[l]**2*
-            np.mean(D_image_map*t_arr[l]+C_image_map))
+    read_noise2 = (np.var(mean_stack_image)*Num -
+        g_arr[l]**2*
+        np.var(D_image_map*t_arr[l]+C_image_map) - 
+        ((Num-1)*avg_corr+1)*np.var(F_image_map))
+    if read_noise2 >= 0:
+        read_noise = np.sqrt(read_noise2)
+    else:
+        read_noise = np.nan
+        warnings.warn('read_noise is NaN.  The number of frames per substack '
+                     'should be higher in order for this read noise estimate '
+                     'to be reliable. However, if the lowest gain setting '
+                      'is much larger than the gain used in the substack, '
+                      'the best estimate for read noise may not be good.')
 
     # actual dark current should only be present in CCD pixels (image area),
     # even if we get erroneous non-zero D values in non-CCD pixels.  Let D_map
@@ -361,7 +469,7 @@ def calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
 
     return (F_map, C_map, D_map, bias_offset, F_image_map, C_image_map,
             D_image_map, Fvar, Cvar, Dvar, read_noise, R_map, F_image_mean,
-            C_image_mean, D_image_mean)
+            C_image_mean, D_image_mean, unreliable_pix_map)
 
 def ENF(g, Nem):
     """Returns the extra-noise function (ENF).
@@ -380,6 +488,7 @@ def ENF(g, Nem):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    from astropy.io import fits
     from emccd_detect.emccd_detect import EMCCDDetect
 
     def imagesc(data, title=None, vmin=None, vmax=None, cmap='viridis',
@@ -436,6 +545,8 @@ if __name__ == '__main__':
     t_arr = grid[1].ravel()
     k_arr = eperdn*np.ones_like(g_arr) # all the same
     #added in after emccd_detect makes the frames (see below)
+    # The mean FPN that will be found is eperdn*(FPN//eperdn) 
+    # due to how I simulate it and then convert the frame to uint16
     FPN = 21 # e
     # the bigger N is, the better the adjusted R^2 per pixel becomes
     N = 30 #Use N=600 for results with better fits (higher values for adjusted
@@ -479,9 +590,27 @@ if __name__ == '__main__':
             np.save(str(save), frame_stack)
             stack_list.append(frame_stack)
 
-            # simulate a constant FPN in image area (not in prescan
+            # simulate a FPN in image area (not in prescan
             # so that it isn't removed when bias is removed)
             stack_list[i] = stack_list[i].astype('float64')
+            im_area = stack_list[i][:,imr0c0[0]:imr0c0[0]+imrows,imr0c0[1]:
+               imr0c0[1]+imcols]
+            
+            # For FPN, could add in a pattern taken from actual data...
+            # fpn = fits.getdata(r'/Users/kevinludwick/Documents/Guillermo_TVAC_all_darks/FPN_image.fits')
+            # im_area[:] += fpn[300:300+im_area.shape[1],300:300+im_area.shape[2]]/k_arr[i]
+
+            # ...or simulate a cross-hatch-like pattern...
+            # groups = (np.round(np.linspace(0, im_area.shape[1], 
+            #                                40))).astype(int)
+            # for j in groups:
+            #     expo = np.where(groups==j)[0][0]
+            #     im_area[:,:,j:j+1] += FPN/k_arr[i] + \
+            #         (-1)**expo*FPN/(k_arr[i]) # in DN
+            #     im_area[:,j:j+1,:] += FPN/k_arr[i] + \
+            #         (-1)**expo*FPN/(k_arr[i]) # in DN
+                
+            # ...or add in a constant offset.  
             stack_list[i][:,imr0c0[0]:imr0c0[0]+imrows,imr0c0[1]:
                imr0c0[1]+imcols] += FPN/k_arr[i] # in DN
 
@@ -511,7 +640,7 @@ if __name__ == '__main__':
 
     (F_map, C_map, D_map, bias_offset, F_image_map, C_image_map, D_image_map,
         Fvar, Cvar, Dvar, read_noise, R_map, F_image_mean, C_image_mean,
-        D_image_mean) = \
+        D_image_mean, unreliable_pix_map) = \
         calibrate_darks_lsq(stack_arr, g_arr, t_arr, k_arr, fwc_em_e, fwc_pp_e,
             meta_path, nonlin_path, Nem = 604)
 
