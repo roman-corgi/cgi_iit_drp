@@ -307,14 +307,25 @@ class TestL1ToL2a(unittest.TestCase):
         self.mask_fixed_tails = False
 
         # full frame________
+        self.meta = Metadata() # uses metadata.yaml
+        self.im_st_row = self.meta.geom['image']['r0c0'][0]
+        self.im_st_col = self.meta.geom['image']['r0c0'][1]
         self.full_active = copy.copy(frame_dn_zeros)
-        self.full_active[0:2, 2:4] = fwc_em_e  # Fake hit
-        self.full_active[0:2, 4] = fwc_em_e / 2  # Trigger end cosmic thresh
-        self.full_active[0:2, 5:12] = 1.  # Fake tail
+        # Fake hit
+        self.full_active[self.im_st_row:self.im_st_row+2, 
+                         self.im_st_col+2:self.im_st_col+4] = fwc_em_e
+        # Trigger end cosmic thresh
+        self.full_active[self.im_st_row:self.im_st_row+2, 
+                         self.im_st_col+4] = fwc_em_e / 2  
+        # Fake tail
+        self.full_active[self.im_st_row:self.im_st_row+2, 
+                         self.im_st_col+5:self.im_st_col+12] = 1.
         self.full_row_mask = np.zeros_like(frame_dn_zeros, dtype='int')
-        self.full_row_mask[0:2, 2:] = 1
+        self.full_row_mask[self.im_st_row:self.im_st_row+2, 
+                           self.im_st_col+2:] = 1
         self.full_row_mask_10 = np.zeros_like(self.full_row_mask)
-        self.full_row_mask_10[0:2, 2:2+2+10+1] = 1
+        self.full_row_mask_10[self.im_st_row:self.im_st_row+2, 
+                              self.im_st_col+2:self.im_st_col+2+2+10+1] = 1
 
         self.full_frame = copy.copy(frame_dn_zeros)
         self.full_frame = self.full_active
@@ -428,7 +439,7 @@ class TestL1ToL2a(unittest.TestCase):
                        self.nonlin_path_ones, meta_path,
                        self.full_dark, self.full_flat, cosm_filter=2,
                        cosm_box=0,
-                       cosm_tail=(2200-1)-1-2) #index 2199 - col 1 -cosm_filter
+                       cosm_tail=(2200-(self.im_st_col+1))-1-2) #index 2199 - col 1 -cosm_filter
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
 
         self.assertTrue((bad_mask == self.full_row_mask).all())
@@ -456,10 +467,13 @@ class TestL1ToL2a(unittest.TestCase):
                        self.nonlin_path_ones, meta_path,
                        self.full_dark, self.full_flat, cosm_filter=2,
                        cosm_box=2,
-                       cosm_tail=(2200-1)-1-2) #index 2199 - col 1 -cosm_filter
+                       #index 2199 - col 1 -cosm_filter
+                       cosm_tail=(2200-(self.im_st_col+1))-1-2) 
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
-        # account for pixels masked via cosm_box=2:
-        self.full_row_mask[0:4,0:5] = 1
+        # account for masking via cosm_box=2 w/o masking outside of image
+        # add rows down b/c im_st_row and im_st_row+1 boh have cosmics
+        self.full_row_mask[self.im_st_row:self.im_st_row+3+1,
+                           self.im_st_col:self.im_st_col+2+2+1] = 1
         self.assertTrue((bad_mask == self.full_row_mask).all())
 
         # now try cosm_tail=10
@@ -471,7 +485,8 @@ class TestL1ToL2a(unittest.TestCase):
                        cosm_tail=10)
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
         # account for pixels masked via cosm_box=2:
-        self.full_row_mask_10[0:4,0:5] = 1
+        self.full_row_mask_10[self.im_st_row:self.im_st_row+3+1,
+                              self.im_st_col:self.im_st_col+2+2+1] = 1
         self.assertTrue((bad_mask == self.full_row_mask_10).all())
 
     def test_full_mask_bleed_over(self):
@@ -481,7 +496,7 @@ class TestL1ToL2a(unittest.TestCase):
         """
         # head starts from column 2 (from def of self.full_frame)
         # to end of row, then 3 more in next row (cosm_filter=2)
-        cosm_tail = 2200-2-2+3
+        cosm_tail = 2200-(self.im_st_col+2)-2+3
         proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
                        bias_offset, em_gain, exptime,
                        self.nonlin_path_ones, meta_path,
@@ -491,8 +506,8 @@ class TestL1ToL2a(unittest.TestCase):
 
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
         # cosmic starting at col 2 in rows 0 and 1
-        self.full_row_mask[1, 0:3] = 1 # 3 extra pixels masked on next row
-        self.full_row_mask[2, 0:3] = 1 # 3 extra pixels masked on next row
+        self.full_row_mask[self.im_st_row+1, 0:3] = 1 # 3 extra pixels masked on next row
+        self.full_row_mask[self.im_st_row+2, 0:3] = 1 # 3 extra pixels masked on next row
         self.assertTrue((bad_mask == self.full_row_mask).all())
 
     def test_full_mask_bleed_over_2(self):
@@ -502,7 +517,7 @@ class TestL1ToL2a(unittest.TestCase):
         """
         # head starts from column 2 (from def of self.full_frame)
         # to end of row, then 3 more in next row (cosm_filter=2)
-        cosm_tail = 2200-2-2+2203 #additional 3 into next row
+        cosm_tail = 2200-2-2+(2200-self.im_st_col)+3
         proc = Process(self.full_bad_pix, eperdn, fwc_em_e, fwc_pp_e,
                        bias_offset, em_gain, exptime,
                        self.nonlin_path_ones, meta_path,
@@ -512,9 +527,9 @@ class TestL1ToL2a(unittest.TestCase):
 
         _, _, _, _, _, bad_mask, _ = proc.L1_to_L2a(self.full_frame)
         # cosmic starting at col 2 in rows 0 and 1
-        self.full_row_mask[1, 0:3] = 1 # 3 extra pixels masked on next row
-        self.full_row_mask[2, 0:] = 1 # fills up the whole next row
-        self.full_row_mask[3, 0:3] = 1 # 3 extra pixels masked on next row
+        self.full_row_mask[self.im_st_row+1, 0:] = 1 # mask all next row
+        self.full_row_mask[self.im_st_row+2, 0:] = 1 # fills up the whole next row
+        self.full_row_mask[self.im_st_row+3, 0:3] = 1 # 3 extra pixels masked on next row
         self.assertTrue((bad_mask == self.full_row_mask).all())
 
     def test_nonlin_fixed_gain(self):

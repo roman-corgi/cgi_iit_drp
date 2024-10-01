@@ -151,7 +151,8 @@ class EMCCDFrame:
                             plat_thresh=plat_thresh,
                             cosm_filter=cosm_filter,
                             cosm_box=cosm_box,
-                            cosm_tail=cosm_tail
+                            cosm_tail=cosm_tail,
+                            meta=self.meta
                             )
         # same thing, but now making masks for full frame (for calibrate_darks)
 
@@ -167,6 +168,7 @@ class EMCCDFrame:
                             cosm_filter=cosm_filter,
                             cosm_box=cosm_box,
                             cosm_tail=cosm_tail,
+                            meta=self.meta,
                             mode='full'
                             )
 
