@@ -10,6 +10,7 @@ import numpy as np
 
 from .gsw_remove_cosmics import find_plateaus, remove_cosmics
 from . import gsw_remove_cosmics
+from .read_metadata import Metadata
 
 # Input parameters
 fwc = 10000.
@@ -64,7 +65,13 @@ bs_image_box[i_streak_rows_t[1], 50:50+len(cosm_bs)] = cosm_bs
 # but the whole box should get masked
 bs_image_box[i_streak_rows_t[1]-2:i_streak_rows_t[1], 50-2:50+2+1] = \
     0.6*fwc
-
+meta = Metadata() # using metadata.yaml
+im_num_rows = meta.geom['image']['rows']
+im_num_cols = meta.geom['image']['cols']
+im_starting_row = meta.geom['image']['r0c0'][0]
+im_ending_row = im_starting_row + im_num_rows
+im_starting_col = meta.geom['image']['r0c0'][1]
+im_ending_col = im_starting_col + im_num_cols
 
 class TestRemoveCosmics(unittest.TestCase):
     """Unit tests for remove_cosmics function."""
@@ -134,7 +141,9 @@ class TestRemoveCosmics(unittest.TestCase):
 
     def test_mask_box(self):
         """Assert correct elements are masked, including the box around
-        the cosmic head and the specified cosmic tail."""
+        the cosmic head and the specified cosmic tail.  This uses 'image' for 
+        mode, and meta is not None, which makes no difference since mode is 
+        'image'."""
         check_mask = np.zeros_like(self.bs_image, dtype=int)
         check_mask[i_streak_rows_t[1]-2:i_streak_rows_t[1]+2+1,
                    50-2:50+2+1] = 1
@@ -144,11 +153,12 @@ class TestRemoveCosmics(unittest.TestCase):
         check_mask = check_mask.astype(int)
         mask = remove_cosmics(bs_image_box, self.fwc, self.sat_thresh,
                             self.plat_thresh, self.cosm_filter, cosm_box=0,
-                            cosm_tail=20)
+                            cosm_tail=20, meta=meta)
 
         self.assertFalse(np.array_equal(mask, check_mask)) # since cosm_box=0
 
-        # now use cosm_box=2 to catch pixels surrounding head
+        # now use cosm_box=2 to catch pixels surrounding head, and let meta be
+        # None
         mask2 = remove_cosmics(bs_image_box, self.fwc, self.sat_thresh,
                             self.plat_thresh, self.cosm_filter, cosm_box=2,
                             cosm_tail=20)
@@ -220,7 +230,7 @@ class TestRemoveCosmics(unittest.TestCase):
 
     def test_cosm_tail_bleed_over(self):
         """Assert correct elements are masked when 2 cosmic rays are in
-        a single row."""
+        a single row with bleed over into next row."""
         check_mask = np.zeros((10,10), dtype=int)
         image = np.zeros((10,10), dtype=float)
         # head
@@ -228,7 +238,7 @@ class TestRemoveCosmics(unittest.TestCase):
 
         # cosmic head
         check_mask[-2,6:] = 1
-        check_mask[-1,0:12] = 1 #bleed over (2+14-1st row of 4)
+        check_mask[-1,0:12] = 1 #bleed over 2+14-(1st row of 4)
         check_mask[-4:,4:9] = 1 # cosm_box=2
 
         mask = remove_cosmics(image, self.fwc, self.sat_thresh,
@@ -247,6 +257,43 @@ class TestRemoveCosmics(unittest.TestCase):
 
         self.assertTrue(np.array_equal(mask, check_mask))
 
+
+    def test_cosm_tail_bleed_over_meta(self):
+        """Assert correct elements are masked when 2 cosmic rays are in
+        a single row with bleed over into next row, while taking into account
+        the use of meta to prevent detections outside of image area from being 
+        flagged."""
+        check_mask = np.zeros((meta.frame_rows,meta.frame_cols), dtype=int)
+        image = np.zeros((meta.frame_rows,meta.frame_cols), dtype=float)
+        # head
+        image[im_ending_row-1,im_ending_col-4:im_ending_col-1] = fwc
+        # would normally trigger a detection, but not inside image area:
+        image[-2,6:9] = fwc
+
+        # cosmic head
+        check_mask[im_ending_row-1,im_ending_col-4:] = 1
+        # with cosm_tail=100, and (88-2) left in row after cosm_filter, 
+        # so bleed 12-2 over next row
+        check_mask[im_ending_row,0:10] = 1
+        # cosm_box gets cut short one row since the end of the image area is 
+        # reached with only 1 extra row of masking below the cosmic head
+        check_mask[im_ending_row-3:im_ending_row+1,
+                   im_ending_col-6:im_ending_col-1] = 1 # cosm_box=2
+
+        mask = remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=2,
+                            cosm_tail=100, meta=meta, mode='full')
+
+        self.assertTrue(np.array_equal(mask, check_mask))
+
+    def test_meta(self):
+        '''Input meta should be an instance of the Metadata class.'''
+        image = np.zeros((meta.frame_rows,meta.frame_cols), dtype=float)
+        with self.assertRaises(Exception):
+            remove_cosmics(image, self.fwc, self.sat_thresh,
+                            self.plat_thresh, cosm_filter=2, cosm_box=2,
+                            cosm_tail=100, meta='foo', mode='full')
+            
 
 class TestFindPlateaus(unittest.TestCase):
     """Unit tests for find_plateaus function.
@@ -376,7 +423,6 @@ class TestFindPlateaus(unittest.TestCase):
                               self.sat_thresh, self.plat_thresh,
                               self.cosm_filter)
         self.assertIsNone(i_beg)
-
 
 
 if __name__ == '__main__':

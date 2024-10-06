@@ -231,6 +231,9 @@ class TestRemoveCosmics(unittest.TestCase):
         self.cosm_filter = 2
         self.cosm_box = 0
         self.cosm_tail = 2200
+        self.meta = Metadata() # using metadata.yaml
+        self.im_st_row = self.meta.geom['image']['r0c0'][0]
+        self.im_st_col = self.meta.geom['image']['r0c0'][1]
         pass
 
     def test_cosm_box_works(self):
@@ -243,13 +246,17 @@ class TestRemoveCosmics(unittest.TestCase):
         """Verify method returns correct mask with a CR."""
         # full frame
         frame_bias0 = np.zeros((meta.frame_rows, meta.frame_cols))
-        frame_bias0[1:3, 2:4] = self.fwc_em  # Fake hit
-        frame_bias0[1:3, 4] = self.fwc_em/2  # Trigger end cosmic thresh
-        frame_bias0[1:3, 5:] = 1.  # Fake tail
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+2:self.im_st_col+4] = self.fwc_em  #Fake hit
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+4] = self.fwc_em/2#Trigger end cosmic thresh
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+5:] = 1.  # Fake tail
         self.frame.frame_bias0 = frame_bias0
         frame_mask = np.zeros_like(frame_bias0, dtype=int)
         # cosm_filter=2,cosm_tail=10, and mask starts at 2
-        frame_mask[1:3, 2:2+2+10+1] = 1
+        frame_mask[self.im_st_row+1:self.im_st_row+3, 
+                   self.im_st_col+2:self.im_st_col+2+2+10+1] = 1
 
         # image area
         image_bias0 = np.zeros((meta.geom['image']['rows'],
@@ -281,9 +288,13 @@ class TestRemoveCosmics(unittest.TestCase):
 
         # full frame
         frame_bias0 = np.zeros((meta.frame_rows, meta.frame_cols))
-        frame_bias0[1:3, 2:4] = self.fwc_pp - 1  # Fake hit *below threshold*
-        frame_bias0[1:3, 4] = self.fwc_pp/2  # Trigger end cosmic thresh
-        frame_bias0[1:3, 5:] = 1.  # Fake tail
+        # Fake hit *below threshold*
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+2:self.im_st_col+4] = self.fwc_pp - 1  
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+4] = self.fwc_pp/2#Trigger end cosmic thresh
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+5:] = 1.  # Fake tail
         self.frame.frame_bias0 = frame_bias0
 
         # image area
@@ -318,10 +329,14 @@ class TestRemoveCosmics(unittest.TestCase):
 
         # full frame
         frame_bias0 = np.zeros((meta.frame_rows, meta.frame_cols))
-        frame_bias0[1:3, 2:4] = self.fwc_em  # Fake hit
-        frame_bias0[1:3, 4] = self.fwc_em/2  # Trigger end cosmic thresh
-        frame_bias0[1:3, 5:] = 1.  # Fake tail
-        frame_bias0[8, 8] = self.fwc_em # isolated pixel
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+2:self.im_st_col+4] = self.fwc_em  #Fake hit
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+4] = self.fwc_em/2#Trigger end cosmic thresh
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+5:] = 1.  # Fake tail
+        frame_bias0[self.im_st_row+8, 
+                    self.im_st_col+8] = self.fwc_em # isolated pixel
         self.frame.frame_bias0 = frame_bias0
 
         # image area
@@ -337,8 +352,11 @@ class TestRemoveCosmics(unittest.TestCase):
         image_mask = np.zeros_like(image_bias0, dtype=int)
 
         # cosm_filter=2,cosm_tail=10, and mask starts at 2
-        frame_mask[1:3, 2:2+2+10+1] = 1
-        frame_mask[8, 8] = 1  # Isolated pixels remove only those pixels
+        frame_mask[self.im_st_row+1:self.im_st_row+3, 
+                   self.im_st_col+2:self.im_st_col+2+2+10+1] = 1
+        #Isolated pixels remove only those pixels
+        frame_mask[self.im_st_row+8, 
+                   self.im_st_col+8] = 1
         image_mask[1:3, 2:2+2+10+1] = 1
         image_mask[8, 8] = 1  # Isolated pixels remove only those pixels
 
@@ -404,10 +422,15 @@ class TestRemoveCosmics(unittest.TestCase):
 
         # full frame
         frame_bias0 = np.zeros((meta.frame_rows, meta.frame_cols))
-        frame_bias0[1:3, 2:4] = self.fwc_em  # Fake hit
-        frame_bias0[1:3, 4] = self.fwc_em/2  # Trigger end cosmic thresh
-        frame_bias0[1:3, 5:] = 1.  # Fake tail
-        frame_bias0[8, 8] = self.fwc_pp*self.em_gain # isolated pixel
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+2:self.im_st_col+4] = self.fwc_em  #Fake hit
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+4] = self.fwc_em/2#Trigger end cosmic thresh
+        frame_bias0[self.im_st_row+1:self.im_st_row+3, 
+                    self.im_st_col+5:] = 1.  # Fake tail
+        #isolated pixel
+        frame_bias0[self.im_st_row+8, 
+                    self.im_st_col+8] = self.fwc_pp*self.em_gain
         self.frame.frame_bias0 = frame_bias0
 
         # image area
@@ -421,8 +444,10 @@ class TestRemoveCosmics(unittest.TestCase):
 
         # cosm_filter=2,cosm_tail=10, and mask starts at 2
         frame_mask = np.zeros_like(frame_bias0, dtype=int)
-        frame_mask[1:3, 2:2+2+10+1] = 1
-        frame_mask[8, 8] = 1  # Isolated pixels remove only those pixels
+        frame_mask[self.im_st_row+1:self.im_st_row+3, 
+                   self.im_st_col+2:self.im_st_col+2+2+10+1] = 1
+        # Isolated pixels remove only those pixels
+        frame_mask[self.im_st_row+8, self.im_st_col+8] = 1 
         # cosm_filter=2,cosm_tail=10, and mask starts at 2
         image_mask = np.zeros_like(image_bias0, dtype=int)
         image_mask[1:3, 2:2+2+10+1] = 1

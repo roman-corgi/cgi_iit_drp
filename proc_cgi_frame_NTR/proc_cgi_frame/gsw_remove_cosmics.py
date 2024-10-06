@@ -3,9 +3,10 @@
 
 import numpy as np
 from scipy.ndimage import median_filter
+from .read_metadata import Metadata
 
 def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
-                   cosm_tail, mode='image'):
+                   cosm_tail, meta=None, mode='image'):
     """Identify and remove saturated cosmic ray hits and tails.
 
     Use sat_thresh (interval 0 to 1) to set the threshold above which cosmics
@@ -44,6 +45,12 @@ def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
         to mask.  If cosm_tail is greater than the number of
         columns left to the end of the row from the cosmic
         plateau, the cosmic masking ends at the end of the row. Defaults to 10.
+    meta : Metadata class instance
+        Metadata class instance, which is used to determine whether the
+        beginning of a plateau is not in the image area, in which case no 
+        cosmic ray masking should occur.  Only relevant when mode is 'full'.
+        Defaults to None, in which case masking is allowed anywhere on the 
+        input frame.
     mode : string
         If 'image', an image-area input is assumed, and if the input
         tail length is longer than the length to the end of the image-area row,
@@ -70,9 +77,25 @@ def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
      ......|<-plateau->|<------------------tail---------->|.........
 
     B Nemati and S Miller - UAH - 02-Oct-2018
+    Kevin Ludwick - UAH - 2024
 
     """
     mask = np.zeros(image.shape, dtype=int)
+    if meta is not None:
+        if not isinstance(meta, Metadata):
+            raise Exception('meta must be an instance of the Metadata class.')
+    if meta is not None and mode=='full':
+        im_num_rows = meta.geom['image']['rows']
+        im_num_cols = meta.geom['image']['cols']
+        im_starting_row = meta.geom['image']['r0c0'][0]
+        im_ending_row = im_starting_row + im_num_rows
+        im_starting_col = meta.geom['image']['r0c0'][1]
+        im_ending_col = im_starting_col + im_num_cols
+    else:
+        im_starting_row = 0
+        im_ending_row = mask.shape[0] - 1 # - 1 to get the index, not size
+        im_starting_col = 0
+        im_ending_col = mask.shape[1] - 1 # - 1 to get the index, not size
 
     # Do a cheap prefilter for rows that don't have anything bright
     max_rows = np.max(image, axis=1)
@@ -80,7 +103,8 @@ def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
 
     for i in i_streak_rows:
         row = image[i]
-
+        if i < im_starting_row or i > im_ending_row:
+            continue
         # Find if and where saturated plateaus start in streak row
         i_begs = find_plateaus(row, fwc, sat_thresh, plat_thresh, cosm_filter)
 
@@ -89,6 +113,8 @@ def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
         ex_l = np.array([])
         if i_begs is not None:
             for i_beg in i_begs:
+                if i_beg < im_starting_col or i_beg > im_ending_col:
+                    continue
                 # implement cosm_tail
                 if i_beg+cosm_filter+cosm_tail+1 > mask.shape[1]:
                     ex_l = np.append(ex_l,
@@ -98,10 +124,11 @@ def remove_cosmics(image, fwc, sat_thresh, plat_thresh, cosm_filter, cosm_box,
                                 mask.shape[1]))
                 mask[i, i_beg:streak_end] = 1
                 # implement cosm_box
-                st_row = max(i-cosm_box, 0)
-                end_row = min(i+cosm_box+1, mask.shape[0])
-                st_col = max(i_beg-cosm_box, 0)
-                end_col = min(i_beg+cosm_box+1, mask.shape[1])
+                # can't have cosm_box appear in non-image pixels
+                st_row = max(i-cosm_box, im_starting_row)
+                end_row = min(i+cosm_box+1, im_ending_row+1)
+                st_col = max(i_beg-cosm_box, im_starting_col)
+                end_col = min(i_beg+cosm_box+1, im_ending_col+1)
                 mask[st_row:end_row, st_col:end_col] = 1
                 pass
 
