@@ -1,0 +1,44 @@
+#spotSepGuessPix : float
+#    Expected separation of the satellite spots from the star. Used as the
+#    separation for the center of the region of interest. Units of pixels.
+#    Compute beforehand as sep in lambda/D and multiply by pix per lambda/D.
+#    6.5*(51.46*0.575/13)
+spotSepGuessPix: 14.79
+
+#roiRadiusPix : float
+#    Radius of each region of interest used when summing the intensity of a
+#    satellite spot. Units of pixels.
+roiRadiusPix: 1.5
+
+#probeRotVecDeg : array_like
+#    1-D array of how many degrees counterclockwise from the x-axis to rotate
+#    the regions of interest used when summing the satellite spots. Note that
+#    a pair of satellite spots is given by just one value. For example, for a
+#    single pair of satellite spots along the x-axis use [0, ] and not 
+#    [0, 180]. And for a plus-shaped layout of spots, use [0, 90].
+probeRotVecDeg: [0, 90]
+
+#nSubpixels : int
+#    Number of subpixels across used to make edge values of the region-of-
+#    interest mask. The value of the edge pixels in the ROI is the mean of
+#    all the subpixel values.
+nSubpixels: 11
+
+#offset_tol_pix : float
+# offset_tol_pix is the tolerance in detector pixels of the star translation
+# relative to the array it is in. It is used to create the translation
+#  bounds as the starting value +/- offset_tol_pix.
+offset_tol_pix: 5.0
+
+#offset_tol_pix : float
+# offset_tol_pix is the tolerance in detector pixels of the star translation
+# relative to the array it is in. It is used to create the translation
+#  bounds as the starting value +/- offset_tol_pix.
+sep_tol_pix: 6.0
+
+# opt_method is the optimization method handed directly to 
+# scipy.optimize.minimize()'s method argument.
+# See https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html
+# for a list of other options.
+# 'Nelder-Mead' and 'Powell' work for this application.
+opt_method: 'Nelder-Mead'
