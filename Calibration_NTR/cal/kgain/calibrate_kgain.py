@@ -508,7 +508,7 @@ def calibrate_kgain(stack_arr, stack_arr2, emgain, min_val, max_val,
         
         added_deviations_shot_arr = [
                 np.sqrt(np.square(np.reshape(std_diffs[x], 
-                newshape=(-1, 1))) - complex(rn_std[x])**2)
+                (-1, 1))) - complex(rn_std[x])**2)
                 for x in range(len(rn_std))
                 ]
         
